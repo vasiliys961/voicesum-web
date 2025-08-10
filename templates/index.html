@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>VoiceSum AI</title>
+  <style>
+    body { font-family: Arial, sans-serif; text-align: center; padding: 20px; background: #f4f6f9; }
+    .container { max-width: 900px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
+    input, button { margin: 10px; padding: 10px; }
+    pre { text-align: left; background: #f0f0f0; padding: 15px; border-radius: 5px; overflow: auto; max-height: 300px; }
+    #result { display: none; margin-top: 20px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🎙️ VoiceSum AI</h1>
+    <p>Загрузите аудиофайл или запишите голос с микрофона.</p>
+
+    <div class="section">
+      <h3>📁 Загрузить файл</h3>
+      <input type="file" name="audio" accept="audio/*" id="fileInput" />
+      <button type="button" onclick="uploadFile()">📤 Обработать файл</button>
+    </div>
+
+    <div class="section">
+      <h3>🔴 Запись с микрофона</h3>
+      <button type="button" id="recordButton">🟢 Начать запись</button>
+      <button type="button" id="stopButton" disabled>🛑 Остановить</button>
+      <span id="status"></span>
+    </div>
+
+    <div id="loading" style="display: none;">⏳ Обработка...</div>
+    <div id="result">
+      <h3>🔤 Транскрипция</h3>
+      <pre id="transcript"></pre>
+      <h3>📌 Резюме (на русском)</h3>
+      <p id="summary"></p>
+    </div>
+  </div>
+
+  <script>
+    let mediaRecorder;
+    let audioChunks = [];
+
+    const recordButton = document.getElementById('recordButton');
+    const stopButton = document.getElementById('stopButton');
+    const status = document.getElementById('status');
+
+    recordButton.onclick = async () => {
+      audioChunks = [];
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        mediaRecorder = new MediaRecorder(stream);
+        mediaRecorder.start();
+        status.textContent = "Идёт запись...";
+        recordButton.disabled = true;
+        stopButton.disabled = false;
+
+        mediaRecorder.ondataavailable = (event) => audioChunks.push(event.data);
+        mediaRecorder.onstop = () => {
+          const blob = new Blob(audioChunks, { type: 'audio/webm' });
+          sendAudioToServer(blob, "recorded.webm");
+        };
+      } catch (err) {
+        status.textContent = "Ошибка микрофона: " + err.message;
+      }
+    };
+
+    stopButton.onclick = () => {
+      mediaRecorder.stop();
+      mediaRecorder.stream.getTracks().forEach(track => track.stop());
+      recordButton.disabled = false;
+      stopButton.disabled = true;
+    };
+
+    function sendAudioToServer(blob, filename) {
+      const formData = new FormData();
+      formData.append('audio', blob, filename);
+      document.getElementById("loading").style.display = "block";
+      document.getElementById("result").style.display = "none";
+
+      fetch("/transcribe", { method: "POST", body: formData })
+        .then(r => r.json())
+        .then(data => {
+          document.getElementById("loading").style.display = "none";
+          if (data.error) alert("Ошибка: " + data.error);
+          else {
+            document.getElementById("transcript").textContent = data.transcript;
+            document.getElementById("summary").textContent = data.summary;
+            document.getElementById("result").style.display = "block";
+          }
+        })
+        .catch(err => {
+          document.getElementById("loading").style.display = "none";
+          alert("Ошибка: " + err.message);
+        });
+    }
+
+    function uploadFile() {
+      const file = document.getElementById('fileInput').files[0];
+      if (!file) return alert("Выберите файл");
+      const formData = new FormData();
+      formData.append('audio', file);
+      document.getElementById("loading").style.display = "block";
+      document.getElementById("result").style.display = "none";
+
+      fetch("/transcribe", { method: "POST", body: formData })
+        .then(r => r.json())
+        .then(data => {
+          document.getElementById("loading").style.display = "none";
+          if (data.error) alert("Ошибка: " + data.error);
+          else {
+            document.getElementById("transcript").textContent = data.transcript;
+            document.getElementById("summary").textContent = data.summary;
+            document.getElementById("result").style.display = "block";
+          }
+        })
+        .catch(err => {
+          document.getElementById("loading").style.display = "none";
+          alert("Ошибка: " + err.message);
+        });
+    }
+  </script>
+</body>
+</html>
