@@ -14,29 +14,32 @@ from pydub import AudioSegment
 import httpx
 from openai import OpenAI
 
-# —— Логирование ——
+# ===== ЛОГИ =====
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("voicesum")
 
+# ===== FLASK =====
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100 MB
 
-# —— Настройки ——
+# ===== ВРЕМЕННАЯ ПАПКА =====
 TEMP_DIR = tempfile.mkdtemp(prefix="voicesum_")
 os.makedirs(TEMP_DIR, exist_ok=True)
 logger.info(f"📁 Используется временная папка: {TEMP_DIR}")
 
+# ===== КЛЮЧИ / НАСТРОЙКИ =====
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 if not OPENROUTER_API_KEY:
     logger.warning("⚠️ OPENROUTER_API_KEY не задан — суммаризация работать не будет.")
 
-# —— LLM клиент (OpenRouter) ——
+# ===== OpenRouter (через OpenAI SDK) =====
 llm_client = OpenAI(
     base_url="https://openrouter.ai/api/v1",
     api_key=OPENROUTER_API_KEY,
+    timeout=30.0,
 )
 
-# —— Vosk: скачивание и инициализация small-модели ——
+# ===== Vosk: скачивание small-модели и инициализация =====
 VOSK_MODEL_URL = os.getenv(
     "VOSK_MODEL_URL",
     "https://alphacephei.com/vosk/models/vosk-model-small-ru-0.22.zip"
@@ -46,6 +49,7 @@ _vosk_ready = False
 _asr_model = None
 
 def ensure_vosk_model():
+    """Скачивает и распаковывает Vosk-модель в TEMP_DIR при отсутствии."""
     if VOSK_DIR.exists() and any(VOSK_DIR.iterdir()):
         logger.info("✅ Модель Vosk уже распакована")
         return
@@ -68,6 +72,7 @@ def ensure_vosk_model():
     logger.info(f"✅ Модель готова: {VOSK_DIR}")
 
 def init_vosk():
+    """Ленивая инициализация Vosk-модели."""
     global _vosk_ready, _asr_model
     if _vosk_ready:
         return
@@ -77,7 +82,9 @@ def init_vosk():
     _vosk_ready = True
     logger.info("🧠 Vosk инициализирован")
 
+# ===== УТИЛИТЫ АУДИО =====
 def convert_to_wav(input_path: str) -> str:
+    """Конвертация любого аудио → WAV 16 kHz mono."""
     audio = AudioSegment.from_file(input_path)
     audio = audio.set_frame_rate(16000).set_channels(1)
     wav_path = os.path.join(TEMP_DIR, f"{int(time.time()*1000)}.wav")
@@ -85,10 +92,11 @@ def convert_to_wav(input_path: str) -> str:
     return wav_path
 
 def transcribe_vosk(wav_path: str) -> str:
+    """Оффлайн ASR через Vosk small."""
     init_vosk()
     from vosk import KaldiRecognizer
     wf = wave.open(wav_path, "rb")
-    if wf.getnchannels() != 1 or wf.getsampwidth() != 2 or wf.getframerate() not in (8000,16000):
+    if wf.getnchannels() != 1 or wf.getsampwidth() != 2 or wf.getframerate() not in (8000, 16000):
         raise RuntimeError("WAV должен быть PCM 16-bit mono 8/16 kHz (это делает convert_to_wav)")
     rec = KaldiRecognizer(_asr_model, wf.getframerate())
     rec.SetWords(True)
@@ -106,19 +114,25 @@ def transcribe_vosk(wav_path: str) -> str:
         parts.append(final["text"])
     return " ".join(t for t in parts if t).strip()
 
+# ===== РЕЗЮМЕ (LLM) =====
+from textwrap import dedent
+
 def generate_summary(text: str) -> str:
     if not OPENROUTER_API_KEY:
         return "Суммаризация недоступна: не задан OPENROUTER_API_KEY."
 
-    prompt = (
-        "Ты — лаконичный аналитик. Выдай строго в формате:\n"
-        "Краткое резюме: <1–2 предложения>\n"
-        "— Решения: <кратко>\n"
-        "— Действия: <кратко>\n"
-        "— Договорённости: <кратко>\n"
-        "— Темы: <кратко>\n\n"
-        f"Разговор:\n\n{text[:12000]}"
-    )
+    prompt = dedent(f"""\
+        Ты — лаконичный аналитик. Выдай строго в формате:
+        Краткое резюме: <1–2 предложения>
+        — Решения: <кратко>
+        — Действия: <кратко>
+        — Договорённости: <кратко>
+        — Темы: <кратко>
+
+        Разговор:
+
+        {text[:12000]}
+    """)
 
     r = llm_client.chat.completions.create(
         model="anthropic/claude-3-haiku",
@@ -130,3 +144,65 @@ def generate_summary(text: str) -> str:
         temperature=0.2,
     )
     return r.choices[0].message.content.strip()
+
+# ===== UI =====
+INDEX_HTML = """
+<!doctype html><html lang="ru"><meta charset="utf-8">
+<title>VoiceSum</title>
+<h1>Загрузите аудио → транскрипция (Vosk) → резюме (OpenRouter)</h1>
+<form method="POST" action="/transcribe" enctype="multipart/form-data">
+  <input type="file" name="audio" accept="audio/*" required>
+  <button type="submit">Отправить</button>
+</form>
+"""
+
+@app.route("/", methods=["GET"])
+def index():
+    return render_template_string(INDEX_HTML)
+
+@app.route("/transcribe", methods=["POST"])
+def transcribe():
+    if 'audio' not in request.files:
+        return jsonify({"error": "Файл не загружен"}), 400
+    f = request.files['audio']
+    if not f.filename:
+        return jsonify({"error": "Файл не выбран"}), 400
+
+    src = os.path.join(TEMP_DIR, f.filename)
+    try:
+        f.save(src)
+        wav = convert_to_wav(src)
+    except Exception as e:
+        logger.exception("Ошибка конвертации")
+        return jsonify({"error": f"Ошибка конвертации: {e}"}), 500
+    finally:
+        try:
+            if os.path.exists(src):
+                os.remove(src)
+        except:
+            pass
+
+    try:
+        transcript = transcribe_vosk(wav)
+    except Exception as e:
+        logger.exception("Ошибка транскрипции")
+        transcript = f"Транскрипция недоступна: {e}"
+    finally:
+        try:
+            if os.path.exists(wav):
+                os.remove(wav)
+        except:
+            pass
+
+    try:
+        summary = generate_summary(transcript if transcript else "Пустая транскрипция.")
+    except Exception as e:
+        logger.exception("Ошибка суммаризации")
+        summary = f"Ошибка генерации резюме: {e}"
+
+    return jsonify({"transcript": transcript, "summary": summary})
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=False)
+
