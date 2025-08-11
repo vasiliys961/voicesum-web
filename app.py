@@ -23,16 +23,16 @@ os.makedirs(TEMP_DIR, exist_ok=True)
 
 logger.info(f"📁 Используется временная папка: {TEMP_DIR}")
 
-# Загрузка Whisper модели
-logger.info("🎙️ Загружаю модель Whisper (small)...")
-whisper_model = whisper.load_model("small", device="cpu")
+# === Загрузка Whisper модели (изменили с 'small' на 'base') ===
+logger.info("🎙️ Загружаю модель Whisper (base)...")
+whisper_model = whisper.load_model("base", device="cpu")  # ← ВАЖНО: base вместо small
 logger.info("✅ Модель Whisper загружена!")
 
-# Клиент OpenRouter
+# === Клиент OpenRouter ===
 from httpx import Client as HttpxClient
 
 llm_client = OpenAI(
-    base_url="https://openrouter.ai/api/v1 ",
+    base_url="https://openrouter.ai/api/v1",
     api_key=OPENROUTER_API_KEY,
     http_client=HttpxClient(
         proxies=None,
@@ -191,7 +191,7 @@ def transcribe():
         logger.error(f"❌ Ошибка обработки: {e}")
         return jsonify({"error": f"Ошибка обработки: {e}"}), 500
 
-# === Запуск ===
+# === Запуск сервера (обязательно для Render) ===
 if __name__ == "__main__":
-    logger.info("✅ Сервер запущен: http://127.0.0.1:5000")
-    app.run(host="127.0.0.1", port=5000, debug=True)
+    port = int(os.environ.get("PORT", 5000))  # ← Render использует переменную PORT
+    app.run(host="0.0.0.0", port=port, debug=False)  # ← host 0.0.0.0 обязателен!
