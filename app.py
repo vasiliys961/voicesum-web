@@ -2,7 +2,6 @@
 from flask import Flask, render_template, request, jsonify
 import os
 import tempfile
-import whisper
 from pydub import AudioSegment
 from openai import OpenAI
 import time
