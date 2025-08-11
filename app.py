@@ -1,3 +1,4 @@
+import base64# app.py
 # app.py
 from flask import Flask, render_template, request, jsonify
 import os
@@ -22,7 +23,7 @@ os.makedirs(TEMP_DIR, exist_ok=True)
 
 logger.info(f"📁 Используется временная папка: {TEMP_DIR}")
 
-# === Клиент OpenRouter (для транскрипции и LLM) ===
+# === Клиент OpenRouter (для chat.completions) ===
 client = openai.OpenAI(
     base_url="https://openrouter.ai/api/v1",
     api_key=OPENROUTER_API_KEY,
@@ -54,7 +55,7 @@ def transcribe():
         return jsonify({"error": "Не удалось сохранить файл"}), 500
 
     try:
-        # Конвертируем в WAV 16kHz mono (обязательно для Whisper)
+        # Конвертируем в WAV 16kHz mono
         wav_path = os.path.join(TEMP_DIR, f"{int(time.time())}.wav")
         audio = AudioSegment.from_file(input_path)
         audio = audio.set_frame_rate(16000).set_channels(1)
@@ -68,14 +69,30 @@ def transcribe():
             os.remove(input_path)
 
     try:
-        # Отправляем аудио в OpenRouter → он сам транскрибирует через Whisper
-        with open(wav_path, "rb") as f:
-            response = client.audio.transcriptions.create(
-                model="openai/whisper-v3",
-                file=f,
-                language="ru"
+        # Читаем аудио и отправляем как файл в chat.completions
+        with open(wav_path, "rb") as audio_file:
+            response = client.chat.completions.create(
+                model="openai/whisper-v3",  # ← модель для транскрипции
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "Пожалуйста, транскрибируй это аудио на русском языке."
+                            },
+                            {
+                                "type": "audio",
+                                "audio": {
+                                    "url": "data:audio/wav;base64," + base64.b64encode(audio_file.read()).decode()
+                                }
+                            }
+                        ]
+                    }
+                ],
+                max_tokens=256
             )
-        transcript = response.text.strip()
+        transcript = response.choices[0].message.content.strip()
         logger.info("✅ Транскрипция получена")
     except Exception as e:
         logger.error(f"❌ Ошибка транскрипции: {e}")
