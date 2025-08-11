@@ -1,189 +1,119 @@
 # app.py
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template_string, request, jsonify
 import os
 import tempfile
-from pydub import AudioSegment
-from openai import OpenAI
 import time
-import math
 import logging
-from httpx import Client as HttpxClient
+from pathlib import Path
+import zipfile
+import shutil
+import wave
+import json
 
-# Логирование
+from pydub import AudioSegment
+import httpx
+from openai import OpenAI
+
+# —— Логирование ——
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("voicesum")
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100 MB
 
-# === Настройки ===
-OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
+# —— Настройки ——
 TEMP_DIR = tempfile.mkdtemp(prefix="voicesum_")
 os.makedirs(TEMP_DIR, exist_ok=True)
-
 logger.info(f"📁 Используется временная папка: {TEMP_DIR}")
 
-# === Загрузка модели Whisper (tiny) ===
-logger.info("🎙️ Загружаю модель Whisper (tiny)...")
-whisper_model = whisper.load_model("tiny", device="cpu")
-logger.info("✅ Модель Whisper загружена!")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+if not OPENROUTER_API_KEY:
+    logger.warning("⚠️ OPENROUTER_API_KEY не задан — суммаризация работать не будет.")
 
-# === Клиент OpenRouter (только для генерации резюме) ===
+# —— LLM клиент (OpenRouter) ——
 llm_client = OpenAI(
     base_url="https://openrouter.ai/api/v1",
     api_key=OPENROUTER_API_KEY,
-    http_client=HttpxClient(timeout=30.0),
 )
 
-# === Вспомогательные функции ===
+# —— Vosk: скачивание и инициализация small-модели ——
+VOSK_MODEL_URL = os.getenv(
+    "VOSK_MODEL_URL",
+    "https://alphacephei.com/vosk/models/vosk-model-small-ru-0.22.zip"
+)
+VOSK_DIR = Path(TEMP_DIR) / "vosk_model"
+_vosk_ready = False
+_asr_model = None
 
-def split_audio(wav_path, chunk_length_sec=300):
-    try:
-        audio = AudioSegment.from_wav(wav_path)
-        chunk_length_ms = chunk_length_sec * 1000
-        chunks = []
-        total_duration_ms = len(audio)
-        num_chunks = math.ceil(total_duration_ms / chunk_length_ms)
+def ensure_vosk_model():
+    if VOSK_DIR.exists() and any(VOSK_DIR.iterdir()):
+        logger.info("✅ Модель Vosk уже распакована")
+        return
+    zip_path = Path(TEMP_DIR) / "vosk_model.zip"
+    logger.info("⬇️ Скачивание Vosk-модели…")
+    with httpx.stream("GET", VOSK_MODEL_URL, timeout=300.0) as r:
+        r.raise_for_status()
+        with open(zip_path, "wb") as f:
+            for chunk in r.iter_bytes():
+                f.write(chunk)
+    logger.info("📦 Распаковка Vosk-модели…")
+    with zipfile.ZipFile(zip_path, "r") as z:
+        root = z.namelist()[0].split("/")[0]
+        z.extractall(TEMP_DIR)
+    extracted = Path(TEMP_DIR) / root
+    if VOSK_DIR.exists():
+        shutil.rmtree(VOSK_DIR)
+    extracted.rename(VOSK_DIR)
+    zip_path.unlink(missing_ok=True)
+    logger.info(f"✅ Модель готова: {VOSK_DIR}")
 
-        for i in range(num_chunks):
-            start = i * chunk_length_ms
-            end = min(start + chunk_length_ms, total_duration_ms)
-            chunk = audio[start:end]
-            chunk_path = os.path.join(TEMP_DIR, f"chunk_{i}_{int(time.time())}.wav")
-            chunk.export(chunk_path, format="wav")
-            chunks.append(chunk_path)
-        logger.info(f"✂️ Аудио нарезано на {len(chunks)} фрагментов по ~{chunk_length_sec} сек.")
-        return chunks
-    except Exception as e:
-        logger.error(f"❌ Ошибка нарезки аудио: {e}")
-        raise
+def init_vosk():
+    global _vosk_ready, _asr_model
+    if _vosk_ready:
+        return
+    ensure_vosk_model()
+    from vosk import Model
+    _asr_model = Model(str(VOSK_DIR))
+    _vosk_ready = True
+    logger.info("🧠 Vosk инициализирован")
 
-def transcribe_very_long_audio(wav_path):
-    full_transcript = ""
-    chunk_paths = split_audio(wav_path)
+def convert_to_wav(input_path: str) -> str:
+    audio = AudioSegment.from_file(input_path)
+    audio = audio.set_frame_rate(16000).set_channels(1)
+    wav_path = os.path.join(TEMP_DIR, f"{int(time.time()*1000)}.wav")
+    audio.export(wav_path, format="wav")
+    return wav_path
 
-    for i, chunk_path in enumerate(chunk_paths):
-        try:
-            if os.path.getsize(chunk_path) == 0:
-                full_transcript += f"[Фрагмент {i+1} пуст] "
-                continue
+def transcribe_vosk(wav_path: str) -> str:
+    init_vosk()
+    from vosk import KaldiRecognizer
+    wf = wave.open(wav_path, "rb")
+    if wf.getnchannels() != 1 or wf.getsampwidth() != 2 or wf.getframerate() not in (8000,16000):
+        raise RuntimeError("WAV должен быть PCM 16-bit mono 8/16 kHz (это делает convert_to_wav)")
+    rec = KaldiRecognizer(_asr_model, wf.getframerate())
+    rec.SetWords(True)
+    parts = []
+    while True:
+        data = wf.readframes(4000)
+        if not data:
+            break
+        if rec.AcceptWaveform(data):
+            res = json.loads(rec.Result())
+            if "text" in res:
+                parts.append(res["text"])
+    final = json.loads(rec.FinalResult())
+    if "text" in final:
+        parts.append(final["text"])
+    return " ".join(t for t in parts if t).strip()
 
-            result = whisper_model.transcribe(
-                chunk_path,
-                language=None,
-                fp16=False,
-                verbose=False
-            )
-            text = result["text"].strip()
-            if text:
-                full_transcript += text + " "
-            else:
-                full_transcript += f"[Фрагмент {i+1} — речь не распознана] "
-        except Exception as e:
-            error_msg = f"[Ошибка фрагмента {i+1}: {str(e)[:50]}...] "
-            full_transcript += error_msg
-            logger.error(f"❌ Ошибка транскрипции: {e}")
-        finally:
-            if os.path.exists(chunk_path):
-                os.remove(chunk_path)
-    return full_transcript.strip()
-
-def generate_summary(text):
-    try:
-        response = llm_client.chat.completions.create(
-            model="anthropic/claude-3-haiku",
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "Ты — лаконичный аналитик. Твоя задача: за 5–8 коротких строк выдать сжатый результат без лишних слов. Пиши по-русски. "
-                        "Никаких эмодзи, маркетинговых фраз, вводных вроде «Итог:». Если факта нет — не выдумывай. Объединяй дубли и формулируй обобщённо."
-                    )
-                },
-                {
-                    "role": "user",
-                    "content": (
-                        f"Проанализируй разговор или доклад ниже и выдай результат строго в формате:\n"
-                        f"Краткое резюме (1–2 предложения, максимум 220 символов).\n"
-                        f"3–5 маркеров, каждый в одной строке, по категориям: решения / действия / договорённости / темы. Если категория не встречается — пропусти её. Если пунктов много — сгруппируй и оставь самое важное.\n"
-                        f"Требования к стилю:\n"
-                        f"Короткие фразы, глаголы в повелительном или инфинитиве (для действий).\n"
-                        f"Без оценочных суждений и советов, только факты из разговора.\n"
-                        f"Не повторяй одно и то же разными словами.\n"
-                        f"Не превышай 6 строк после резюме.\n"
-                        f"Формат вывода (строго):\n"
-                        f"Краткое резюме: <1–2 предложения>\n"
-                        f"— Решения: <кратко>\n"
-                        f"— Действия: <кратко>\n"
-                        f"— Договорённости: <кратко>\n"
-                        f"— Темы: <кратко>\n\n"
-                        f"Разговор:\n\n{text[:12000]}"
-                    )
-                }
-            ],
-            max_tokens=500,
-            temperature=0.2
-        )
-        return response.choices[0].message.content.strip()
-    except Exception as e:
-        logger.error(f"❌ Ошибка генерации резюме: {e}")
-        return f"Ошибка генерации резюме: {e}"
-
-# === Маршруты ===
-
-@app.route("/")
-def index():
-    return render_template("index.html")
-
-@app.route("/transcribe", methods=["POST"])
-def transcribe():
-    if 'audio' not in request.files:
-        return jsonify({"error": "Файл не загружен"}), 400
-
-    file = request.files['audio']
-    if file.filename == '':
-        return jsonify({"error": "Файл не выбран"}), 400
-
-    input_path = os.path.join(TEMP_DIR, file.filename)
-    try:
-        file.save(input_path)
-        logger.info(f"📥 Файл сохранён: {input_path}")
-    except Exception as e:
-        logger.error(f"❌ Ошибка сохранения: {e}")
-        return jsonify({"error": "Не удалось сохранить файл"}), 500
-
-    # Конвертация в WAV 16kHz mono
-    wav_path = os.path.join(TEMP_DIR, f"{int(time.time())}.wav")
-    try:
-        audio = AudioSegment.from_file(input_path)
-        audio = audio.set_frame_rate(16000).set_channels(1)
-        audio.export(wav_path, format="wav")
-        logger.info(f"✅ Конвертация успешна: {wav_path}")
-    except Exception as e:
-        logger.error(f"❌ Ошибка конвертации: {e}")
-        return jsonify({"error": f"Ошибка конвертации: {e}"}), 500
-    finally:
-        if os.path.exists(input_path):
-            os.remove(input_path)
-
-    try:
-        transcript = transcribe_very_long_audio(wav_path)
-        if os.path.exists(wav_path):
-            os.remove(wav_path)
-        if not transcript:
-            return jsonify({"error": "Не удалось распознать речь"}), 400
-
-        summary = generate_summary(transcript)
-
-        return jsonify({
-            "transcript": transcript,
-            "summary": summary
-        })
-    except Exception as e:
-        logger.error(f"❌ Ошибка обработки: {e}")
-        return jsonify({"error": f"Ошибка обработки: {e}"}), 500
-
-# === Запуск сервера ===
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=False)
+def generate_summary(text: str) -> str:
+    if not OPENROUTER_API_KEY:
+        return "Суммаризация недоступна: не задан OPENROUTER_API_KEY."
+    prompt = (
+        "Ты — лаконичный аналитик. Выдай:\n"
+        "Краткое резюме: <1–2 предложения>\n"
+        "— Решения: <кратко>\n"
+        "— Действия: <кратко>\n"
+        "— Договорённости: <кратко>\n"
+        "— Темы: <кратко>\n\n"
+        f"Разговор:\n\n{text
