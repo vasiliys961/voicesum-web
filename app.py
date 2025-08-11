@@ -109,11 +109,24 @@ def transcribe_vosk(wav_path: str) -> str:
 def generate_summary(text: str) -> str:
     if not OPENROUTER_API_KEY:
         return "Суммаризация недоступна: не задан OPENROUTER_API_KEY."
+
     prompt = (
-        "Ты — лаконичный аналитик. Выдай:\n"
+        "Ты — лаконичный аналитик. Выдай строго в формате:\n"
         "Краткое резюме: <1–2 предложения>\n"
         "— Решения: <кратко>\n"
         "— Действия: <кратко>\n"
         "— Договорённости: <кратко>\n"
         "— Темы: <кратко>\n\n"
-        f"Разговор:\n\n{text
+        f"Разговор:\n\n{text[:12000]}"
+    )
+
+    r = llm_client.chat.completions.create(
+        model="anthropic/claude-3-haiku",
+        messages=[
+            {"role": "system", "content": "Ты — лаконичный аналитик."},
+            {"role": "user", "content": prompt}
+        ],
+        max_tokens=500,
+        temperature=0.2,
+    )
+    return r.choices[0].message.content.strip()
