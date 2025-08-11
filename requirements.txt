@@ -1,6 +1,6 @@
-# requirements.txt
 Flask==3.0.3
-openai==1.35.0
+openai-whisper==20231117
 pydub==0.25.1
+numpy==1.26.4
 httpx==0.23.0
 gunicorn==21.2.0

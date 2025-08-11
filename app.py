@@ -10,7 +10,7 @@ import math
 import logging
 from httpx import Client as HttpxClient
 
-# Настройка логирования
+# Логирование
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -24,21 +24,21 @@ os.makedirs(TEMP_DIR, exist_ok=True)
 
 logger.info(f"📁 Используется временная папка: {TEMP_DIR}")
 
-# === Загрузка Whisper модели (base — ~150 МБ) ===
+# === Загрузка модели Whisper (base — работает в 512 МБ) ===
 logger.info("🎙️ Загружаю модель Whisper (base)...")
 whisper_model = whisper.load_model("base", device="cpu")
 logger.info("✅ Модель Whisper загружена!")
 
-# === Клиент OpenRouter (только для LLM) ===
+# === Клиент OpenRouter (для генерации резюме) ===
 llm_client = OpenAI(
     base_url="https://openrouter.ai/api/v1",
     api_key=OPENROUTER_API_KEY,
     http_client=HttpxClient(timeout=30.0),
 )
 
-# === Вспомогательные функции ===
+# === Функции ===
 
-def split_audio(wav_path, chunk_length_sec=300):  # 5 минут
+def split_audio(wav_path, chunk_length_sec=300):
     try:
         audio = AudioSegment.from_wav(wav_path)
         chunk_length_ms = chunk_length_sec * 1000
@@ -153,7 +153,6 @@ def transcribe():
         logger.error(f"❌ Ошибка сохранения: {e}")
         return jsonify({"error": "Не удалось сохранить файл"}), 500
 
-    # Конвертация в WAV 16kHz mono
     wav_path = os.path.join(TEMP_DIR, f"{int(time.time())}.wav")
     try:
         audio = AudioSegment.from_file(input_path)
@@ -175,16 +174,12 @@ def transcribe():
             return jsonify({"error": "Не удалось распознать речь"}), 400
 
         summary = generate_summary(transcript)
-
-        return jsonify({
-            "transcript": transcript,
-            "summary": summary
-        })
+        return jsonify({"transcript": transcript, "summary": summary})
     except Exception as e:
         logger.error(f"❌ Ошибка обработки: {e}")
         return jsonify({"error": f"Ошибка обработки: {e}"}), 500
 
-# === Запуск сервера ===
+# === Запуск сервера (обязательно для Render) ===
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=False)
+    port = int(os.environ.get("PORT", 5000))  # Render сам подставит PORT
+    app.run(host="0.0.0.0", port=port, debug=False)  # host 0.0.0.0 обязателен!
