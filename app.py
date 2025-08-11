@@ -1,53 +1,95 @@
 # app.py
-import streamlit as st
-import openai
+from flask import Flask, render_template, request, jsonify
 import os
 import tempfile
-import base64
+import whisper
 from pydub import AudioSegment
+from openai import OpenAI
+import time
+import math
+import logging
 from httpx import Client as HttpxClient
 
-# Настройка страницы
-st.set_page_config(page_title="VoiceSum AI", layout="centered")
-st.title("🎙️ VoiceSum AI")
+# Логирование
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+app = Flask(__name__)
+app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100 MB
 
 # === Настройки ===
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
+TEMP_DIR = tempfile.mkdtemp(prefix="voicesum_")
+os.makedirs(TEMP_DIR, exist_ok=True)
 
-if not OPENAI_API_KEY or not OPENROUTER_API_KEY:
-    st.error("🔑 Не задан API-ключ. Проверь переменные окружения.")
-    st.stop()
+logger.info(f"📁 Используется временная папка: {TEMP_DIR}")
 
-# Клиенты
-openai_client = openai.OpenAI(api_key=OPENAI_API_KEY, http_client=HttpxClient(timeout=60.0))
-llm_client = openai.OpenAI(
+# === Загрузка модели Whisper (tiny) ===
+logger.info("🎙️ Загружаю модель Whisper (tiny)...")
+whisper_model = whisper.load_model("tiny", device="cpu")
+logger.info("✅ Модель Whisper загружена!")
+
+# === Клиент OpenRouter (только для генерации резюме) ===
+llm_client = OpenAI(
     base_url="https://openrouter.ai/api/v1",
     api_key=OPENROUTER_API_KEY,
     http_client=HttpxClient(timeout=30.0),
 )
 
-# Временная папка
-temp_dir = tempfile.mkdtemp(prefix="voicesum_")
+# === Вспомогательные функции ===
 
-# === Функции ===
-
-def transcribe_audio(file_path):
-    """Транскрибирует аудио через OpenAI Whisper"""
+def split_audio(wav_path, chunk_length_sec=300):
     try:
-        with open(file_path, "rb") as f:
-            response = openai_client.audio.transcriptions.create(
-                model="whisper-1",
-                file=f,
-                language="ru"
-            )
-        return response.text.strip()
+        audio = AudioSegment.from_wav(wav_path)
+        chunk_length_ms = chunk_length_sec * 1000
+        chunks = []
+        total_duration_ms = len(audio)
+        num_chunks = math.ceil(total_duration_ms / chunk_length_ms)
+
+        for i in range(num_chunks):
+            start = i * chunk_length_ms
+            end = min(start + chunk_length_ms, total_duration_ms)
+            chunk = audio[start:end]
+            chunk_path = os.path.join(TEMP_DIR, f"chunk_{i}_{int(time.time())}.wav")
+            chunk.export(chunk_path, format="wav")
+            chunks.append(chunk_path)
+        logger.info(f"✂️ Аудио нарезано на {len(chunks)} фрагментов по ~{chunk_length_sec} сек.")
+        return chunks
     except Exception as e:
-        st.error(f"❌ Ошибка транскрипции: {e}")
-        return None
+        logger.error(f"❌ Ошибка нарезки аудио: {e}")
+        raise
+
+def transcribe_very_long_audio(wav_path):
+    full_transcript = ""
+    chunk_paths = split_audio(wav_path)
+
+    for i, chunk_path in enumerate(chunk_paths):
+        try:
+            if os.path.getsize(chunk_path) == 0:
+                full_transcript += f"[Фрагмент {i+1} пуст] "
+                continue
+
+            result = whisper_model.transcribe(
+                chunk_path,
+                language=None,
+                fp16=False,
+                verbose=False
+            )
+            text = result["text"].strip()
+            if text:
+                full_transcript += text + " "
+            else:
+                full_transcript += f"[Фрагмент {i+1} — речь не распознана] "
+        except Exception as e:
+            error_msg = f"[Ошибка фрагмента {i+1}: {str(e)[:50]}...] "
+            full_transcript += error_msg
+            logger.error(f"❌ Ошибка транскрипции: {e}")
+        finally:
+            if os.path.exists(chunk_path):
+                os.remove(chunk_path)
+    return full_transcript.strip()
 
 def generate_summary(text):
-    """Генерирует резюме через Claude через OpenRouter"""
     try:
         response = llm_client.chat.completions.create(
             model="anthropic/claude-3-haiku",
@@ -85,50 +127,64 @@ def generate_summary(text):
         )
         return response.choices[0].message.content.strip()
     except Exception as e:
-        st.error(f"❌ Ошибка генерации: {e}")
-        return None
+        logger.error(f"❌ Ошибка генерации резюме: {e}")
+        return f"Ошибка генерации резюме: {e}"
 
-# === Интерфейс ===
+# === Маршруты ===
 
-st.write("Загрузите аудиофайл или запишите голос с микрофона.")
+@app.route("/")
+def index():
+    return render_template("index.html")
 
-# Выбор: загрузка или запись
-mode = st.radio("Выберите способ", ["📁 Загрузить файл", "🎤 Запись с микрофона"])
+@app.route("/transcribe", methods=["POST"])
+def transcribe():
+    if 'audio' not in request.files:
+        return jsonify({"error": "Файл не загружен"}), 400
 
-audio_file = None
+    file = request.files['audio']
+    if file.filename == '':
+        return jsonify({"error": "Файл не выбран"}), 400
 
-if mode == "📁 Загрузить файл":
-    audio_file = st.file_uploader("Загрузите аудиофайл", type=["wav", "mp3", "webm", "m4a"])
-elif mode == "🎤 Запись с микрофона":
-    audio_file = st.audio_input("Запишите голос")
+    input_path = os.path.join(TEMP_DIR, file.filename)
+    try:
+        file.save(input_path)
+        logger.info(f"📥 Файл сохранён: {input_path}")
+    except Exception as e:
+        logger.error(f"❌ Ошибка сохранения: {e}")
+        return jsonify({"error": "Не удалось сохранить файл"}), 500
 
-if audio_file:
-    # Сохраняем файл
-    input_path = os.path.join(temp_dir, audio_file.name)
-    with open(input_path, "wb") as f:
-        f.write(audio_file.read())
-
-    # Конвертируем в WAV 16kHz mono
-    wav_path = os.path.join(temp_dir, "input.wav")
+    # Конвертация в WAV 16kHz mono
+    wav_path = os.path.join(TEMP_DIR, f"{int(time.time())}.wav")
     try:
         audio = AudioSegment.from_file(input_path)
         audio = audio.set_frame_rate(16000).set_channels(1)
         audio.export(wav_path, format="wav")
+        logger.info(f"✅ Конвертация успешна: {wav_path}")
     except Exception as e:
-        st.error(f"❌ Ошибка конвертации: {e}")
-        st.stop()
+        logger.error(f"❌ Ошибка конвертации: {e}")
+        return jsonify({"error": f"Ошибка конвертации: {e}"}), 500
+    finally:
+        if os.path.exists(input_path):
+            os.remove(input_path)
 
-    if st.button("🔄 Начать обработку"):
-        with st.spinner("Транскрибирую..."):
-            transcript = transcribe_audio(wav_path)
-        
-        if transcript:
-            st.subheader("📝 Транскрипция")
-            st.write(transcript)
+    try:
+        transcript = transcribe_very_long_audio(wav_path)
+        if os.path.exists(wav_path):
+            os.remove(wav_path)
+        if not transcript:
+            return jsonify({"error": "Не удалось распознать речь"}), 400
 
-            with st.spinner("Генерирую резюме..."):
-                summary = generate_summary(transcript)
-            
-            if summary:
-                st.subheader("📋 Резюме (на русском)")
-                st.write(summary)
+        summary = generate_summary(transcript)
+
+        return jsonify({
+            "transcript": transcript,
+            "summary": summary
+        })
+    except Exception as e:
+        logger.error(f"❌ Ошибка обработки: {e}")
+        return jsonify({"error": f"Ошибка обработки: {e}"}), 500
+
+# === Запуск сервера ===
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=False)
