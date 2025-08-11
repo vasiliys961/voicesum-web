@@ -8,7 +8,7 @@ import time
 import logging
 from httpx import Client as HttpxClient
 
-# Настройка логирования
+# Логирование
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -22,7 +22,7 @@ os.makedirs(TEMP_DIR, exist_ok=True)
 
 logger.info(f"📁 Используется временная папка: {TEMP_DIR}")
 
-# === Клиент OpenRouter (работает с аудио!) ===
+# === Клиент OpenRouter (для транскрипции и LLM) ===
 client = openai.OpenAI(
     base_url="https://openrouter.ai/api/v1",
     api_key=OPENROUTER_API_KEY,
@@ -54,36 +54,35 @@ def transcribe():
         return jsonify({"error": "Не удалось сохранить файл"}), 500
 
     try:
-        # Отправляем аудио напрямую в OpenRouter — он сам транскрибирует!
-        response = client.chat.completions.create(
-            model="openai/whisper-v3",  # ← специальная модель для транскрипции
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": "Пожалуйста, транскрибируй это аудио на русском языке."
-                        },
-                        {
-                            "type": "audio",
-                            "audio": {
-                                "url": f"file://{input_path}"
-                            }
-                        }
-                    ]
-                }
-            ],
-            max_tokens=256
-        )
-        transcript = response.choices[0].message.content.strip()
+        # Конвертируем в WAV 16kHz mono (обязательно для Whisper)
+        wav_path = os.path.join(TEMP_DIR, f"{int(time.time())}.wav")
+        audio = AudioSegment.from_file(input_path)
+        audio = audio.set_frame_rate(16000).set_channels(1)
+        audio.export(wav_path, format="wav")
+        logger.info(f"✅ Конвертация в WAV: {wav_path}")
+    except Exception as e:
+        logger.error(f"❌ Ошибка конвертации: {e}")
+        return jsonify({"error": f"Ошибка конвертации: {e}"}), 500
+    finally:
+        if os.path.exists(input_path):
+            os.remove(input_path)
+
+    try:
+        # Отправляем аудио в OpenRouter → он сам транскрибирует через Whisper
+        with open(wav_path, "rb") as f:
+            response = client.audio.transcriptions.create(
+                model="openai/whisper-v3",
+                file=f,
+                language="ru"
+            )
+        transcript = response.text.strip()
         logger.info("✅ Транскрипция получена")
     except Exception as e:
         logger.error(f"❌ Ошибка транскрипции: {e}")
         return jsonify({"error": f"Ошибка транскрипции: {e}"}), 500
     finally:
-        if os.path.exists(input_path):
-            os.remove(input_path)
+        if os.path.exists(wav_path):
+            os.remove(wav_path)
 
     if not transcript:
         return jsonify({"error": "Не удалось распознать речь"}), 400
