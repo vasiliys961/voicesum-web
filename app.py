@@ -1,9 +1,8 @@
-# app.py - Версия с официальной библиотекой AssemblyAI
+# app.py - Версия без зависимости от ffmpeg
 from flask import Flask, render_template, request, jsonify
 import os
 import tempfile
 import assemblyai as aai
-from pydub import AudioSegment
 from openai import OpenAI
 import time
 import logging
@@ -248,7 +247,7 @@ def index():
 def health():
     return jsonify({
         "status": "ok",
-        "service": "AssemblyAI Official SDK",
+        "service": "AssemblyAI Official SDK (No ffmpeg dependency)",
         "api_configured": bool(ASSEMBLYAI_API_KEY),
         "openrouter_configured": bool(OPENROUTER_API_KEY),
         "features": [
@@ -292,10 +291,10 @@ def transcribe():
         file_size = os.path.getsize(input_path)
         logger.info(f"📥 Файл сохранён: {file_size / 1024 / 1024:.1f} MB")
         
-        # Получаем информацию об аудио
-        audio = AudioSegment.from_file(input_path)
-        duration_minutes = len(audio) / 1000 / 60
-        logger.info(f"📊 Длительность: {duration_minutes:.1f} минут")
+        # Примерная оценка длительности без pydub
+        # Для MP3: ~1MB = ~1 минута при среднем качестве
+        estimated_duration = file_size / 1024 / 1024  # грубая оценка в минутах
+        logger.info(f"📊 Примерная длительность: ~{estimated_duration:.1f} минут")
         
         # Создаем транскрайбер с нашей конфигурацией
         config = get_transcription_config()
@@ -315,6 +314,10 @@ def transcribe():
         
         logger.info("✅ Транскрипция завершена успешно!")
         
+        # Получаем точную длительность из результата AssemblyAI
+        audio_duration_ms = getattr(transcript, 'audio_duration', None)
+        actual_duration = audio_duration_ms / 1000 / 60 if audio_duration_ms else estimated_duration
+        
         # Создаем умное резюме
         logger.info("🧠 Генерирую умное резюме...")
         summary = summarizer.create_smart_summary(transcript)
@@ -330,7 +333,7 @@ def transcribe():
         highlights = getattr(transcript, 'auto_highlights', None)
         
         # Подсчет использованных кредитов
-        credits_used = duration_minutes / 60 * 0.37  # примерно $0.37 за час
+        credits_used = actual_duration / 60 * 0.37  # примерно $0.37 за час
         
         total_time = time.time() - start_time
         logger.info(f"✅ Полная обработка завершена за {total_time:.1f}с")
@@ -344,7 +347,7 @@ def transcribe():
             # Статистика
             "statistics": {
                 "processing_time": f"{total_time:.1f}s",
-                "audio_duration": f"{duration_minutes:.1f}min", 
+                "audio_duration": f"{actual_duration:.1f}min", 
                 "file_size": f"{file_size / 1024 / 1024:.1f}MB",
                 "confidence": getattr(transcript, 'confidence', 0),
                 "credits_used": f"${credits_used:.3f}",
@@ -411,5 +414,5 @@ def transcribe():
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    logger.info(f"✅ AssemblyAI Official сервер запущен на порту: {port}")
+    logger.info(f"✅ AssemblyAI без ffmpeg сервер запущен на порту: {port}")
     app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
