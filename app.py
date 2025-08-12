@@ -1,4 +1,4 @@
-# app.py
+# app.py - Исправленная версия для Koyeb
 from flask import Flask, render_template, request, jsonify
 import os
 import tempfile
@@ -18,7 +18,11 @@ app = Flask(__name__, static_folder="static", template_folder="templates")
 app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100 MB
 
 # === Настройки ===
-OPENROUTER_API_KEY = "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"
+# Получаем API ключ из переменных окружения (БЕЗОПАСНОСТЬ!)
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
+if not OPENROUTER_API_KEY:
+    logger.error("❌ OPENROUTER_API_KEY не найден в переменных окружения!")
+    
 TEMP_DIR = tempfile.mkdtemp(prefix="voicesum_")
 os.makedirs(TEMP_DIR, exist_ok=True)
 
@@ -26,18 +30,25 @@ logger.info(f"📁 Используется временная папка: {TEMP
 
 # === Загрузка модели Whisper (small) ===
 logger.info("🎙️ Загружаю модель Whisper (small)...")
-whisper_model = whisper.load_model("small", device="cpu")
-logger.info("✅ Модель Whisper загружена!")
+try:
+    whisper_model = whisper.load_model("small", device="cpu")
+    logger.info("✅ Модель Whisper загружена!")
+except Exception as e:
+    logger.error(f"❌ Ошибка загрузки Whisper: {e}")
+    whisper_model = None
 
 # === Клиент OpenRouter (для генерации резюме) ===
-llm_client = OpenAI(
-    base_url="https://openrouter.ai/api/v1",
-    api_key=OPENROUTER_API_KEY,
-    http_client=HttpxClient(
-        proxies=None,
-        timeout=30.0,
-    ),
-)
+if OPENROUTER_API_KEY:
+    llm_client = OpenAI(
+        base_url="https://openrouter.ai/api/v1",
+        api_key=OPENROUTER_API_KEY,
+        http_client=HttpxClient(
+            proxies=None,
+            timeout=30.0,
+        ),
+    )
+else:
+    llm_client = None
 
 # === Вспомогательные функции ===
 
@@ -65,6 +76,9 @@ def split_audio(wav_path, chunk_length_sec=300):
 
 def transcribe_very_long_audio(wav_path):
     """Транскрибирует длинное аудио с автоопределением языка"""
+    if not whisper_model:
+        raise Exception("Модель Whisper не загружена")
+        
     full_transcript = ""
     chunk_paths = split_audio(wav_path)
 
@@ -96,6 +110,9 @@ def transcribe_very_long_audio(wav_path):
 
 def generate_summary(text):
     """Генерирует резюме по строгому формату"""
+    if not llm_client:
+        return "Ошибка: API ключ OpenRouter не настроен"
+        
     try:
         response = llm_client.chat.completions.create(
             model="anthropic/claude-3-haiku",
@@ -142,8 +159,20 @@ def generate_summary(text):
 def index():
     return render_template("index.html")
 
+@app.route("/health")
+def health():
+    """Health check для Koyeb"""
+    return jsonify({
+        "status": "ok",
+        "whisper_loaded": whisper_model is not None,
+        "openrouter_configured": llm_client is not None
+    })
+
 @app.route("/transcribe", methods=["POST"])
 def transcribe():
+    if not whisper_model:
+        return jsonify({"error": "Модель Whisper не загружена"}), 500
+        
     if 'audio' not in request.files:
         return jsonify({"error": "Файл не загружен"}), 400
 
@@ -192,5 +221,7 @@ def transcribe():
 
 # === Запуск сервера ===
 if __name__ == "__main__":
-    logger.info("✅ Сервер запущен: http://127.0.0.1:5000")
-    app.run(host="127.0.0.1", port=5000, debug=True)
+    # Для Koyeb используем переменную окружения PORT
+    port = int(os.environ.get("PORT", 5000))
+    logger.info(f"✅ Сервер запущен на порту: {port}")
+    app.run(host="0.0.0.0", port=port, debug=False)
