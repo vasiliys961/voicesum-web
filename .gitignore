@@ -12,4 +12,3 @@ venv/
 *.mp3
 *.log
 .env
-.python-version
