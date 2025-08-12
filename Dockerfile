@@ -1,22 +1,25 @@
 FROM python:3.10-slim
 
-# Установка ffmpeg
+# Установка системных зависимостей
 RUN apt-get update && apt-get install -y \
     ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
-# Настройка рабочей директории
+# Рабочая директория
 WORKDIR /app
 
-# Копируем requirements.txt и устанавливаем зависимости
+# Копирование файлов
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Копируем остальной код
 COPY . .
 
-# Создаём временную папку
-RUN mkdir -p /tmp/voicesum
+# Установка Python зависимостей
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Предварительная загрузка модели Whisper
+RUN python -c "import whisper; whisper.load_model('small')"
+
+# Порт
+EXPOSE 8000
 
 # Запуск
-CMD ["gunicorn", "app:app", "--bind", "0.0.0.0:$PORT"]
+CMD ["gunicorn", "app:app", "--bind", "0.0.0.0:8000", "--timeout", "120", "--workers", "1", "--preload"]
