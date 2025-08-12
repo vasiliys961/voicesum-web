@@ -1,191 +1,242 @@
-# app.py - Версия для длинных аудиофайлов
+# app.py - Версия с официальной библиотекой AssemblyAI
 from flask import Flask, render_template, request, jsonify
 import os
 import tempfile
-import whisper
+import assemblyai as aai
 from pydub import AudioSegment
 from openai import OpenAI
 import time
 import logging
-from httpx import Client as HttpxClient
-import threading
-import math
 
-# Настройка логирования
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__, static_folder="static", template_folder="templates")
-app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100 MB
+app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 500 MB
 
-# === Настройки ===
+# === API ключи ===
+ASSEMBLYAI_API_KEY = os.environ.get("ASSEMBLYAI_API_KEY", "fb277d535ab94838bc14cc2f687b30be")
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
-TEMP_DIR = tempfile.mkdtemp(prefix="voicesum_")
-os.makedirs(TEMP_DIR, exist_ok=True)
+TEMP_DIR = tempfile.mkdtemp(prefix="voicesum_aai_")
 
 logger.info(f"📁 Используется временная папка: {TEMP_DIR}")
 
-# === Ленивая загрузка модели ===
-whisper_model = None
-llm_client = None
+# === Настройка AssemblyAI ===
+aai.settings.api_key = ASSEMBLYAI_API_KEY
+logger.info("🔑 AssemblyAI API ключ настроен")
 
-def load_whisper_model():
-    global whisper_model
-    if whisper_model is None:
-        logger.info("🎙️ Загружаю модель Whisper (tiny для длинных файлов)...")
-        try:
-            whisper_model = whisper.load_model("tiny", device="cpu")  # tiny для скорости
-            logger.info("✅ Модель Whisper (tiny) загружена!")
-        except Exception as e:
-            logger.error(f"❌ Ошибка загрузки Whisper: {e}")
-            raise
-    return whisper_model
-
-def load_llm_client():
-    global llm_client
-    if llm_client is None and OPENROUTER_API_KEY:
-        try:
-            llm_client = OpenAI(
-                base_url="https://openrouter.ai/api/v1",
-                api_key=OPENROUTER_API_KEY,
-                http_client=HttpxClient(proxies=None, timeout=60.0),
-            )
-            logger.info("✅ OpenRouter клиент инициализирован!")
-        except Exception as e:
-            logger.error(f"❌ Ошибка OpenRouter: {e}")
-            raise
-    return llm_client
-
-def split_audio_into_chunks(wav_path, chunk_duration_minutes=4):
-    """Разбивает аудио на куски по N минут"""
-    try:
-        audio = AudioSegment.from_wav(wav_path)
-        chunk_length_ms = chunk_duration_minutes * 60 * 1000  # в миллисекундах
-        chunks = []
-        total_duration_ms = len(audio)
-        num_chunks = math.ceil(total_duration_ms / chunk_length_ms)
-
-        logger.info(f"📁 Разбиваю аудио на {num_chunks} частей по {chunk_duration_minutes} мин")
-
-        for i in range(num_chunks):
-            start = i * chunk_length_ms
-            end = min(start + chunk_length_ms, total_duration_ms)
-            chunk = audio[start:end]
-            
-            chunk_path = os.path.join(TEMP_DIR, f"chunk_{i}_{int(time.time())}.wav")
-            chunk.export(chunk_path, format="wav")
-            chunks.append({
-                'path': chunk_path,
-                'index': i,
-                'start_time': start / 1000,  # в секундах
-                'duration': len(chunk) / 1000
-            })
+# === Конфигурация транскрипции ===
+def get_transcription_config():
+    """Возвращает конфигурацию с максимальными возможностями"""
+    return aai.TranscriptionConfig(
+        # === Основные настройки ===
+        speech_model=aai.SpeechModel.best,  # Лучшая модель
+        language_code="ru",  # Русский язык
         
-        return chunks, total_duration_ms / 1000  # возвращаем общую длительность в секундах
-    except Exception as e:
-        logger.error(f"❌ Ошибка разбивки аудио: {e}")
-        raise
+        # === AI функции (бесплатные!) ===
+        speaker_labels=True,  # Определение спикеров
+        speakers_expected=2,  # Ожидаемое количество
+        
+        auto_highlights=True,  # Ключевые моменты
+        auto_chapters=True,   # Автоматические главы
+        
+        sentiment_analysis=True,  # Анализ эмоций
+        entity_detection=True,    # Определение сущностей
+        
+        content_safety=True,      # Модерация контента
+        iab_categories=True,      # Категоризация по темам
+        
+        summarization=True,       # Встроенное резюме
+        summary_model=aai.SummarizationModel.informative,
+        summary_type=aai.SummarizationType.bullets,
+        
+        # === Настройки качества ===
+        punctuate=True,          # Пунктуация
+        format_text=True,        # Форматирование текста
+        dual_channel=False,      # Моно обработка
+        
+        # === Дополнительные функции ===
+        disfluencies=False,      # Убираем "эм", "ах"
+        filter_profanity=False,  # Не фильтруем мат
+        redact_pii=False,        # Не скрываем персональные данные
+    )
 
-def transcribe_chunk_with_timeout(chunk_info, timeout_seconds=60):
-    """Транскрибирует один кусок с таймаутом"""
-    def transcribe_thread():
-        nonlocal result, error
+# === Умный генератор резюме ===
+class AdvancedSummarizer:
+    def __init__(self, openrouter_key):
+        self.client = OpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=openrouter_key
+        ) if openrouter_key else None
+    
+    def create_smart_summary(self, transcript_result):
+        """Создает умное резюме на основе всех данных AssemblyAI"""
+        if not self.client:
+            return self._create_basic_summary(transcript_result)
+        
         try:
-            model = load_whisper_model()
-            transcript_result = model.transcribe(
-                chunk_info['path'], 
-                language=None, 
-                fp16=False, 
-                verbose=False
-            )
-            result = transcript_result["text"].strip()
-        except Exception as e:
-            error = e
-
-    result = None
-    error = None
-    
-    thread = threading.Thread(target=transcribe_thread)
-    thread.daemon = True
-    thread.start()
-    thread.join(timeout_seconds)
-    
-    if thread.is_alive():
-        logger.error(f"❌ Транскрипция куска {chunk_info['index']} превысила таймаут")
-        return f"[Кусок {chunk_info['index']+1}: таймаут транскрипции]"
-    
-    if error:
-        logger.error(f"❌ Ошибка транскрипции куска {chunk_info['index']}: {error}")
-        return f"[Кусок {chunk_info['index']+1}: ошибка транскрипции]"
-    
-    return result or f"[Кусок {chunk_info['index']+1}: пустой результат]"
-
-def transcribe_long_audio(wav_path):
-    """Транскрибирует длинное аудио по частям"""
-    chunks, total_duration = split_audio_into_chunks(wav_path, chunk_duration_minutes=4)
-    full_transcript = ""
-    successful_chunks = 0
-    
-    logger.info(f"🎙️ Начинаю транскрипцию {len(chunks)} частей...")
-    
-    for i, chunk_info in enumerate(chunks):
-        try:
-            logger.info(f"🔄 Обрабатываю часть {i+1}/{len(chunks)} ({chunk_info['duration']:.1f}с)")
+            # Собираем все данные
+            transcript = transcript_result.text
+            chapters = getattr(transcript_result, 'chapters', None) or []
+            highlights = getattr(transcript_result, 'auto_highlights', None)
+            sentiment = getattr(transcript_result, 'sentiment_analysis_results', None) or []
+            entities = getattr(transcript_result, 'entities', None) or []
+            builtin_summary = getattr(transcript_result, 'summary', None)
             
-            transcript = transcribe_chunk_with_timeout(chunk_info, timeout_seconds=45)
+            # Формируем богатый контекст
+            context = f"ПОЛНЫЙ ТРАНСКРИПТ:\n{transcript[:25000]}\n\n"
             
-            if transcript and not transcript.startswith("[Кусок"):
-                # Добавляем временную метку
-                start_min = int(chunk_info['start_time'] // 60)
-                start_sec = int(chunk_info['start_time'] % 60)
-                full_transcript += f"\n\n[{start_min:02d}:{start_sec:02d}] {transcript}"
-                successful_chunks += 1
-            else:
-                full_transcript += f"\n\n{transcript}"
+            if chapters:
+                context += "📚 АВТОМАТИЧЕСКИЕ ГЛАВЫ:\n"
+                for i, chapter in enumerate(chapters[:10], 1):
+                    headline = getattr(chapter, 'headline', f'Глава {i}')
+                    start_time = getattr(chapter, 'start', 0) / 1000 / 60  # в минутах
+                    context += f"{i}. {headline} ({start_time:.1f}мин)\n"
+                context += "\n"
+            
+            if highlights and hasattr(highlights, 'results'):
+                context += "💡 КЛЮЧЕВЫЕ МОМЕНТЫ:\n"
+                for highlight in highlights.results[:15]:
+                    text = getattr(highlight, 'text', '')
+                    rank = getattr(highlight, 'rank', 0)
+                    if text:
+                        context += f"• {text} (важность: {rank:.2f})\n"
+                context += "\n"
+            
+            if entities:
+                context += "🏷️ УПОМЯНУТЫЕ СУЩНОСТИ:\n"
+                entity_groups = {}
+                for entity in entities[:25]:
+                    entity_type = getattr(entity, 'entity_type', 'other')
+                    entity_text = getattr(entity, 'text', '')
+                    if entity_type not in entity_groups:
+                        entity_groups[entity_type] = []
+                    if entity_text not in entity_groups[entity_type]:
+                        entity_groups[entity_type].append(entity_text)
                 
+                for entity_type, texts in entity_groups.items():
+                    context += f"  {entity_type}: {', '.join(texts[:5])}\n"
+                context += "\n"
+            
+            if builtin_summary:
+                context += f"🤖 БАЗОВОЕ РЕЗЮМЕ ASSEMBLYAI:\n{builtin_summary}\n\n"
+            
+            # Анализ тональности
+            if sentiment:
+                positive_count = sum(1 for s in sentiment if getattr(s, 'sentiment', '') == 'POSITIVE')
+                negative_count = sum(1 for s in sentiment if getattr(s, 'sentiment', '') == 'NEGATIVE')
+                total_sentiment = len(sentiment)
+                if total_sentiment > 0:
+                    context += f"🎭 ОБЩАЯ ТОНАЛЬНОСТЬ: {positive_count}/{total_sentiment} позитивных, {negative_count}/{total_sentiment} негативных\n\n"
+            
+            # Генерируем умное резюме
+            response = self.client.chat.completions.create(
+                model="anthropic/claude-3-haiku",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "Ты - профессиональный аналитик аудиоконтента с опытом работы с деловыми встречами, "
+                            "интервью, лекциями и подкастами. На основе предоставленного богатого контекста создай "
+                            "подробное структурированное резюме на русском языке.\n\n"
+                            
+                            "СТРУКТУРА РЕЗЮМЕ:\n"
+                            "📋 КРАТКОЕ РЕЗЮМЕ (2-3 предложения - суть записи)\n"
+                            "🎯 ОСНОВНЫЕ ТЕМЫ И РАЗДЕЛЫ (с временными метками если есть)\n"
+                            "👥 УЧАСТНИКИ И РОЛИ (если определены спикеры)\n"
+                            "💡 КЛЮЧЕВЫЕ ИНСАЙТЫ И ВЫВОДЫ\n"
+                            "📊 ВАЖНЫЕ ФАКТЫ, ЦИФРЫ, ДАТЫ\n"
+                            "🎭 ЭМОЦИОНАЛЬНАЯ ТОНАЛЬНОСТЬ\n"
+                            "✅ РЕШЕНИЯ, ДЕЙСТВИЯ, NEXT STEPS\n"
+                            "🏷️ КЛЮЧЕВЫЕ ПЕРСОНЫ И ОРГАНИЗАЦИИ\n\n"
+                            
+                            "ТРЕБОВАНИЯ:\n"
+                            "- Используй эмодзи для структуры\n"
+                            "- Будь конкретным и информативным\n"
+                            "- Выдели самое важное\n"
+                            "- Сохраняй профессиональный тон\n"
+                            "- Не повторяй информацию\n"
+                            "- Используй данные от AssemblyAI как основу"
+                        )
+                    },
+                    {"role": "user", "content": context}
+                ],
+                max_tokens=1500,
+                temperature=0.3
+            )
+            
+            return response.choices[0].message.content.strip()
+            
         except Exception as e:
-            logger.error(f"❌ Ошибка обработки части {i+1}: {e}")
-            full_transcript += f"\n\n[Часть {i+1}: ошибка обработки]"
-        finally:
-            # Удаляем временный файл куска
-            if os.path.exists(chunk_info['path']):
-                os.remove(chunk_info['path'])
+            logger.error(f"❌ Ошибка умного резюме: {e}")
+            return self._create_basic_summary(transcript_result)
     
-    logger.info(f"✅ Транскрипция завершена: {successful_chunks}/{len(chunks)} частей успешно")
-    return full_transcript.strip(), successful_chunks, len(chunks), total_duration
+    def _create_basic_summary(self, transcript_result):
+        """Создает базовое резюме из данных AssemblyAI"""
+        summary_parts = []
+        
+        # Встроенное резюме
+        builtin_summary = getattr(transcript_result, 'summary', None)
+        if builtin_summary:
+            summary_parts.append(f"📋 РЕЗЮМЕ:\n{builtin_summary}")
+        
+        # Главы
+        chapters = getattr(transcript_result, 'chapters', None)
+        if chapters:
+            summary_parts.append("\n🎯 ОСНОВНЫЕ РАЗДЕЛЫ:")
+            for i, chapter in enumerate(chapters[:8], 1):
+                headline = getattr(chapter, 'headline', f'Раздел {i}')
+                start_time = getattr(chapter, 'start', 0) / 1000 / 60
+                summary_parts.append(f"{i}. {headline} ({start_time:.1f}мин)")
+        
+        # Ключевые моменты
+        highlights = getattr(transcript_result, 'auto_highlights', None)
+        if highlights and hasattr(highlights, 'results'):
+            summary_parts.append("\n💡 КЛЮЧЕВЫЕ МОМЕНТЫ:")
+            for highlight in highlights.results[:10]:
+                text = getattr(highlight, 'text', '').strip()
+                if text:
+                    summary_parts.append(f"• {text}")
+        
+        return "\n".join(summary_parts) if summary_parts else "📋 Базовое резюме недоступно"
 
-def generate_long_summary(text):
-    """Генерирует резюме для длинного текста"""
-    try:
-        client = load_llm_client()
-        if not client:
-            return "Резюме: API не настроен"
+# === Инициализация ===
+summarizer = AdvancedSummarizer(OPENROUTER_API_KEY)
+
+# === Вспомогательные функции ===
+def analyze_sentiment_overall(sentiment_results):
+    """Анализирует общую тональность"""
+    if not sentiment_results:
+        return "neutral", 0, 0, 0
+    
+    positive_count = sum(1 for s in sentiment_results if getattr(s, 'sentiment', '') == 'POSITIVE')
+    negative_count = sum(1 for s in sentiment_results if getattr(s, 'sentiment', '') == 'NEGATIVE')
+    neutral_count = len(sentiment_results) - positive_count - negative_count
+    
+    if positive_count > negative_count and positive_count > neutral_count:
+        return "positive", positive_count, negative_count, neutral_count
+    elif negative_count > positive_count and negative_count > neutral_count:
+        return "negative", positive_count, negative_count, neutral_count
+    else:
+        return "neutral", positive_count, negative_count, neutral_count
+
+def format_entities_by_type(entities):
+    """Группирует сущности по типам"""
+    if not entities:
+        return {}
+    
+    entity_groups = {}
+    for entity in entities:
+        entity_type = getattr(entity, 'entity_type', 'other')
+        entity_text = getattr(entity, 'text', '')
         
-        # Для очень длинного текста берем первые 15000 символов
-        text_for_summary = text[:15000]
-        if len(text) > 15000:
-            text_for_summary += "\n\n[...текст сокращен для анализа...]"
+        if entity_type not in entity_groups:
+            entity_groups[entity_type] = []
         
-        response = client.chat.completions.create(
-            model="anthropic/claude-3-haiku",
-            messages=[
-                {
-                    "role": "system", 
-                    "content": (
-                        "Создай подробное структурированное резюме длинной аудиозаписи на русском языке. "
-                        "Выдели основные темы, ключевые моменты, решения и выводы. "
-                        "Организуй информацию по разделам."
-                    )
-                },
-                {"role": "user", "content": f"Транскрипт длинной записи:\n\n{text_for_summary}"}
-            ],
-            max_tokens=800,  # Больше токенов для длинного резюме
-            temperature=0.3
-        )
-        return response.choices[0].message.content.strip()
-    except Exception as e:
-        logger.error(f"❌ Ошибка резюме: {e}")
-        return f"Резюме недоступно: {str(e)[:100]}"
+        if entity_text and entity_text not in entity_groups[entity_type]:
+            entity_groups[entity_type].append(entity_text)
+    
+    return entity_groups
 
 # === Маршруты ===
 
@@ -197,19 +248,33 @@ def index():
 def health():
     return jsonify({
         "status": "ok",
-        "whisper_loaded": whisper_model is not None,
-        "model": "tiny-chunks",
-        "openrouter_configured": OPENROUTER_API_KEY is not None,
-        "max_file_size": "100MB",
-        "max_duration": "unlimited",
-        "chunk_size": "4min"
+        "service": "AssemblyAI Official SDK",
+        "api_configured": bool(ASSEMBLYAI_API_KEY),
+        "openrouter_configured": bool(OPENROUTER_API_KEY),
+        "features": [
+            "🎙️ Лучшая модель транскрипции",
+            "👥 Определение спикеров", 
+            "📚 Автоматические главы",
+            "💡 Ключевые моменты",
+            "🎭 Анализ тональности",
+            "🏷️ Определение сущностей",
+            "🤖 Встроенное резюме",
+            "🧠 Умное резюме Claude",
+            "🛡️ Модерация контента",
+            "📊 Категоризация тем"
+        ],
+        "limits": {
+            "free_credits": "$50 (185 hours)",
+            "max_file_size": "500MB",
+            "max_duration": "unlimited",
+            "parallel_processing": "5 files"
+        }
     })
 
 @app.route("/transcribe", methods=["POST"])
 def transcribe():
     start_time = time.time()
     input_path = None
-    wav_path = None
     
     try:
         if 'audio' not in request.files:
@@ -220,69 +285,131 @@ def transcribe():
             return jsonify({"error": "Файл не выбран"}), 400
 
         timestamp = int(time.time() * 1000)
-        input_path = os.path.join(TEMP_DIR, f"input_{timestamp}.tmp")
-        wav_path = os.path.join(TEMP_DIR, f"converted_{timestamp}.wav")
+        input_path = os.path.join(TEMP_DIR, f"aai_{timestamp}.{file.filename.split('.')[-1]}")
         
         # Сохранение файла
         file.save(input_path)
         file_size = os.path.getsize(input_path)
         logger.info(f"📥 Файл сохранён: {file_size / 1024 / 1024:.1f} MB")
         
-        # Конвертация
-        logger.info("🔄 Конвертирую аудио...")
+        # Получаем информацию об аудио
         audio = AudioSegment.from_file(input_path)
-        original_duration = len(audio) / 1000 / 60  # в минутах
+        duration_minutes = len(audio) / 1000 / 60
+        logger.info(f"📊 Длительность: {duration_minutes:.1f} минут")
         
-        logger.info(f"📊 Исходная длительность: {original_duration:.1f} минут")
+        # Создаем транскрайбер с нашей конфигурацией
+        config = get_transcription_config()
+        transcriber = aai.Transcriber(config=config)
         
-        # Конвертируем в стандартный формат
-        audio = audio.set_frame_rate(16000).set_channels(1)
-        audio.export(wav_path, format="wav")
+        # Запускаем транскрипцию
+        logger.info("🚀 Запускаю транскрипцию AssemblyAI...")
+        transcript = transcriber.transcribe(input_path)
         
-        logger.info("✅ Конвертация завершена, начинаю транскрипцию...")
+        # Проверяем результат
+        if transcript.status == aai.TranscriptStatus.error:
+            error_msg = getattr(transcript, 'error', 'Неизвестная ошибка')
+            raise RuntimeError(f"Ошибка транскрипции: {error_msg}")
         
-        # Транскрипция длинного аудио
-        transcript, successful_chunks, total_chunks, duration = transcribe_long_audio(wav_path)
-        
-        if not transcript or len(transcript.strip()) < 10:
+        if not transcript.text:
             return jsonify({"error": "Не удалось получить транскрипцию"}), 400
-
-        # Генерируем резюме
-        logger.info("📝 Генерирую резюме...")
-        summary = generate_long_summary(transcript)
+        
+        logger.info("✅ Транскрипция завершена успешно!")
+        
+        # Создаем умное резюме
+        logger.info("🧠 Генерирую умное резюме...")
+        summary = summarizer.create_smart_summary(transcript)
+        
+        # Анализируем результаты
+        sentiment_analysis = getattr(transcript, 'sentiment_analysis_results', None) or []
+        overall_sentiment, pos_count, neg_count, neu_count = analyze_sentiment_overall(sentiment_analysis)
+        
+        entities = getattr(transcript, 'entities', None) or []
+        entities_by_type = format_entities_by_type(entities)
+        
+        chapters = getattr(transcript, 'chapters', None) or []
+        highlights = getattr(transcript, 'auto_highlights', None)
+        
+        # Подсчет использованных кредитов
+        credits_used = duration_minutes / 60 * 0.37  # примерно $0.37 за час
         
         total_time = time.time() - start_time
-        logger.info(f"✅ Полная обработка завершена за {total_time/60:.1f} минут")
+        logger.info(f"✅ Полная обработка завершена за {total_time:.1f}с")
 
-        return jsonify({
-            "transcript": transcript,
+        # Формируем детальный ответ
+        response_data = {
+            "transcript": transcript.text,
             "summary": summary,
+            "service_used": "AssemblyAI Official SDK",
+            
+            # Статистика
             "statistics": {
                 "processing_time": f"{total_time:.1f}s",
-                "processing_time_min": f"{total_time/60:.1f}min",
-                "audio_duration": f"{duration/60:.1f}min",
+                "audio_duration": f"{duration_minutes:.1f}min", 
                 "file_size": f"{file_size / 1024 / 1024:.1f}MB",
-                "successful_chunks": successful_chunks,
-                "total_chunks": total_chunks,
-                "success_rate": f"{successful_chunks/total_chunks*100:.1f}%"
+                "confidence": getattr(transcript, 'confidence', 0),
+                "credits_used": f"${credits_used:.3f}",
+                "words_count": len(transcript.text.split()) if transcript.text else 0
             },
-            "model_used": "whisper-tiny-chunks"
-        })
+            
+            # AI анализ
+            "ai_analysis": {
+                "speakers_detected": len(set([utterance.speaker for utterance in getattr(transcript, 'utterances', []) if utterance.speaker])),
+                "chapters_found": len(chapters),
+                "highlights_found": len(highlights.results) if highlights and hasattr(highlights, 'results') else 0,
+                "entities_found": len(entities),
+                "sentiment_breakdown": {
+                    "overall": overall_sentiment,
+                    "positive_segments": pos_count,
+                    "negative_segments": neg_count,
+                    "neutral_segments": neu_count
+                }
+            }
+        }
+        
+        # Добавляем детальные результаты если есть
+        if chapters:
+            response_data["chapters"] = [
+                {
+                    "headline": getattr(ch, 'headline', ''),
+                    "start_time": f"{getattr(ch, 'start', 0)/1000/60:.1f}min",
+                    "end_time": f"{getattr(ch, 'end', 0)/1000/60:.1f}min",
+                    "summary": getattr(ch, 'summary', '')
+                }
+                for ch in chapters[:15]
+            ]
+        
+        if highlights and hasattr(highlights, 'results'):
+            response_data["key_highlights"] = [
+                {
+                    "text": getattr(h, 'text', ''),
+                    "rank": getattr(h, 'rank', 0),
+                    "start_time": f"{getattr(h, 'start', 0)/1000/60:.1f}min"
+                }
+                for h in highlights.results[:20]
+            ]
+        
+        if entities_by_type:
+            # Ограничиваем количество сущностей каждого типа
+            limited_entities = {}
+            for entity_type, entity_list in entities_by_type.items():
+                limited_entities[entity_type] = entity_list[:10]
+            response_data["entities_by_type"] = limited_entities
+        
+        # Встроенное резюме от AssemblyAI
+        builtin_summary = getattr(transcript, 'summary', None)
+        if builtin_summary:
+            response_data["assemblyai_summary"] = builtin_summary
+
+        return jsonify(response_data)
         
     except Exception as e:
         logger.error(f"❌ Ошибка обработки: {e}")
-        return jsonify({"error": f"Ошибка: {str(e)[:150]}"}), 500
+        return jsonify({"error": f"Ошибка: {str(e)[:300]}"}), 500
     finally:
-        # Очистка файлов
-        for path in [input_path, wav_path]:
-            if path and os.path.exists(path):
-                try:
-                    os.remove(path)
-                except:
-                    pass
+        if input_path and os.path.exists(input_path):
+            os.remove(input_path)
 
-# === Запуск ===
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    logger.info(f"✅ Сервер запущен на порту: {port}")
+    logger.info(f"✅ AssemblyAI Official сервер запущен на порту: {port}")
     app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
