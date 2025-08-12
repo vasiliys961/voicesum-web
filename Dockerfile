@@ -5,19 +5,18 @@ RUN apt-get update && apt-get install -y \
     ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
-# Установка зависимостей
+# Настройка рабочей директории
 WORKDIR /app
+
+# Копируем requirements.txt и устанавливаем зависимости
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Копирование кода
+# Копируем остальной код
 COPY . .
 
-# Создание временной директории
+# Создаём временную папку
 RUN mkdir -p /tmp/voicesum
-
-# Переменная окружения для порта
-ENV PORT=8000
 
 # Запуск
 CMD ["gunicorn", "app:app", "--bind", "0.0.0.0:$PORT"]
