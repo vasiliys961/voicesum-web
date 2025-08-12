@@ -1,4 +1,4 @@
-# app.py - Ультра-легкая версия с ограничениями
+# app.py - Версия для длинных аудиофайлов
 from flask import Flask, render_template, request, jsonify
 import os
 import tempfile
@@ -9,14 +9,14 @@ import time
 import logging
 from httpx import Client as HttpxClient
 import threading
-import signal
+import math
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__, static_folder="static", template_folder="templates")
-app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024  # Уменьшено до 10 MB
+app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100 MB
 
 # === Настройки ===
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
@@ -30,12 +30,11 @@ whisper_model = None
 llm_client = None
 
 def load_whisper_model():
-    """Загрузка модели только при первом использовании"""
     global whisper_model
     if whisper_model is None:
-        logger.info("🎙️ Загружаю модель Whisper (tiny)...")
+        logger.info("🎙️ Загружаю модель Whisper (tiny для длинных файлов)...")
         try:
-            whisper_model = whisper.load_model("tiny", device="cpu")
+            whisper_model = whisper.load_model("tiny", device="cpu")  # tiny для скорости
             logger.info("✅ Модель Whisper (tiny) загружена!")
         except Exception as e:
             logger.error(f"❌ Ошибка загрузки Whisper: {e}")
@@ -43,14 +42,13 @@ def load_whisper_model():
     return whisper_model
 
 def load_llm_client():
-    """Загрузка LLM клиента только при первом использовании"""
     global llm_client
     if llm_client is None and OPENROUTER_API_KEY:
         try:
             llm_client = OpenAI(
                 base_url="https://openrouter.ai/api/v1",
                 api_key=OPENROUTER_API_KEY,
-                http_client=HttpxClient(proxies=None, timeout=20.0),
+                http_client=HttpxClient(proxies=None, timeout=60.0),
             )
             logger.info("✅ OpenRouter клиент инициализирован!")
         except Exception as e:
@@ -58,21 +56,49 @@ def load_llm_client():
             raise
     return llm_client
 
-# === Функции с таймаутом ===
+def split_audio_into_chunks(wav_path, chunk_duration_minutes=4):
+    """Разбивает аудио на куски по N минут"""
+    try:
+        audio = AudioSegment.from_wav(wav_path)
+        chunk_length_ms = chunk_duration_minutes * 60 * 1000  # в миллисекундах
+        chunks = []
+        total_duration_ms = len(audio)
+        num_chunks = math.ceil(total_duration_ms / chunk_length_ms)
 
-class TimeoutError(Exception):
-    pass
+        logger.info(f"📁 Разбиваю аудио на {num_chunks} частей по {chunk_duration_minutes} мин")
 
-def timeout_handler(signum, frame):
-    raise TimeoutError("Операция превысила таймаут")
+        for i in range(num_chunks):
+            start = i * chunk_length_ms
+            end = min(start + chunk_length_ms, total_duration_ms)
+            chunk = audio[start:end]
+            
+            chunk_path = os.path.join(TEMP_DIR, f"chunk_{i}_{int(time.time())}.wav")
+            chunk.export(chunk_path, format="wav")
+            chunks.append({
+                'path': chunk_path,
+                'index': i,
+                'start_time': start / 1000,  # в секундах
+                'duration': len(chunk) / 1000
+            })
+        
+        return chunks, total_duration_ms / 1000  # возвращаем общую длительность в секундах
+    except Exception as e:
+        logger.error(f"❌ Ошибка разбивки аудио: {e}")
+        raise
 
-def transcribe_with_timeout(wav_path, timeout_seconds=30):
-    """Транскрипция с таймаутом"""
+def transcribe_chunk_with_timeout(chunk_info, timeout_seconds=60):
+    """Транскрибирует один кусок с таймаутом"""
     def transcribe_thread():
         nonlocal result, error
         try:
             model = load_whisper_model()
-            result = model.transcribe(wav_path, language=None, fp16=False, verbose=False)
+            transcript_result = model.transcribe(
+                chunk_info['path'], 
+                language=None, 
+                fp16=False, 
+                verbose=False
+            )
+            result = transcript_result["text"].strip()
         except Exception as e:
             error = e
 
@@ -85,37 +111,81 @@ def transcribe_with_timeout(wav_path, timeout_seconds=30):
     thread.join(timeout_seconds)
     
     if thread.is_alive():
-        logger.error(f"❌ Транскрипция превысила таймаут {timeout_seconds}с")
-        raise TimeoutError(f"Транскрипция превысила {timeout_seconds} секунд")
+        logger.error(f"❌ Транскрипция куска {chunk_info['index']} превысила таймаут")
+        return f"[Кусок {chunk_info['index']+1}: таймаут транскрипции]"
     
     if error:
-        raise error
+        logger.error(f"❌ Ошибка транскрипции куска {chunk_info['index']}: {error}")
+        return f"[Кусок {chunk_info['index']+1}: ошибка транскрипции]"
     
-    if result:
-        return result["text"].strip()
-    
-    raise Exception("Неизвестная ошибка транскрипции")
+    return result or f"[Кусок {chunk_info['index']+1}: пустой результат]"
 
-def generate_summary_simple(text):
-    """Упрощенная генерация резюме"""
+def transcribe_long_audio(wav_path):
+    """Транскрибирует длинное аудио по частям"""
+    chunks, total_duration = split_audio_into_chunks(wav_path, chunk_duration_minutes=4)
+    full_transcript = ""
+    successful_chunks = 0
+    
+    logger.info(f"🎙️ Начинаю транскрипцию {len(chunks)} частей...")
+    
+    for i, chunk_info in enumerate(chunks):
+        try:
+            logger.info(f"🔄 Обрабатываю часть {i+1}/{len(chunks)} ({chunk_info['duration']:.1f}с)")
+            
+            transcript = transcribe_chunk_with_timeout(chunk_info, timeout_seconds=45)
+            
+            if transcript and not transcript.startswith("[Кусок"):
+                # Добавляем временную метку
+                start_min = int(chunk_info['start_time'] // 60)
+                start_sec = int(chunk_info['start_time'] % 60)
+                full_transcript += f"\n\n[{start_min:02d}:{start_sec:02d}] {transcript}"
+                successful_chunks += 1
+            else:
+                full_transcript += f"\n\n{transcript}"
+                
+        except Exception as e:
+            logger.error(f"❌ Ошибка обработки части {i+1}: {e}")
+            full_transcript += f"\n\n[Часть {i+1}: ошибка обработки]"
+        finally:
+            # Удаляем временный файл куска
+            if os.path.exists(chunk_info['path']):
+                os.remove(chunk_info['path'])
+    
+    logger.info(f"✅ Транскрипция завершена: {successful_chunks}/{len(chunks)} частей успешно")
+    return full_transcript.strip(), successful_chunks, len(chunks), total_duration
+
+def generate_long_summary(text):
+    """Генерирует резюме для длинного текста"""
     try:
         client = load_llm_client()
         if not client:
             return "Резюме: API не настроен"
         
+        # Для очень длинного текста берем первые 15000 символов
+        text_for_summary = text[:15000]
+        if len(text) > 15000:
+            text_for_summary += "\n\n[...текст сокращен для анализа...]"
+        
         response = client.chat.completions.create(
             model="anthropic/claude-3-haiku",
             messages=[
-                {"role": "system", "content": "Создай краткое резюме на русском языке, максимум 2 предложения."},
-                {"role": "user", "content": f"Текст: {text[:3000]}"}  # Еще меньше токенов
+                {
+                    "role": "system", 
+                    "content": (
+                        "Создай подробное структурированное резюме длинной аудиозаписи на русском языке. "
+                        "Выдели основные темы, ключевые моменты, решения и выводы. "
+                        "Организуй информацию по разделам."
+                    )
+                },
+                {"role": "user", "content": f"Транскрипт длинной записи:\n\n{text_for_summary}"}
             ],
-            max_tokens=150,
+            max_tokens=800,  # Больше токенов для длинного резюме
             temperature=0.3
         )
         return response.choices[0].message.content.strip()
     except Exception as e:
         logger.error(f"❌ Ошибка резюме: {e}")
-        return f"Резюме недоступно: {str(e)[:50]}"
+        return f"Резюме недоступно: {str(e)[:100]}"
 
 # === Маршруты ===
 
@@ -128,10 +198,11 @@ def health():
     return jsonify({
         "status": "ok",
         "whisper_loaded": whisper_model is not None,
+        "model": "tiny-chunks",
         "openrouter_configured": OPENROUTER_API_KEY is not None,
-        "model": "tiny-lazy",
-        "max_file_size": "10MB",
-        "max_duration": "60s"
+        "max_file_size": "100MB",
+        "max_duration": "unlimited",
+        "chunk_size": "4min"
     })
 
 @app.route("/transcribe", methods=["POST"])
@@ -148,7 +219,6 @@ def transcribe():
         if file.filename == '':
             return jsonify({"error": "Файл не выбран"}), 400
 
-        # Уникальные имена файлов
         timestamp = int(time.time() * 1000)
         input_path = os.path.join(TEMP_DIR, f"input_{timestamp}.tmp")
         wav_path = os.path.join(TEMP_DIR, f"converted_{timestamp}.wav")
@@ -156,51 +226,52 @@ def transcribe():
         # Сохранение файла
         file.save(input_path)
         file_size = os.path.getsize(input_path)
-        logger.info(f"📥 Файл сохранён: {file_size} байт")
+        logger.info(f"📥 Файл сохранён: {file_size / 1024 / 1024:.1f} MB")
         
-        # Конвертация с жесткими ограничениями
+        # Конвертация
+        logger.info("🔄 Конвертирую аудио...")
         audio = AudioSegment.from_file(input_path)
+        original_duration = len(audio) / 1000 / 60  # в минутах
         
-        # Ограничение по длительности - максимум 60 секунд
-        if len(audio) > 60000:  # 60 секунд
-            audio = audio[:60000]
-            logger.info("⏱️ Аудио обрезано до 60 секунд")
+        logger.info(f"📊 Исходная длительность: {original_duration:.1f} минут")
         
-        # Агрессивное сжатие
+        # Конвертируем в стандартный формат
         audio = audio.set_frame_rate(16000).set_channels(1)
-        audio.export(wav_path, format="wav", parameters=["-ac", "1", "-ar", "16000"])
+        audio.export(wav_path, format="wav")
         
-        logger.info(f"✅ Конвертация завершена за {time.time() - start_time:.1f}с")
+        logger.info("✅ Конвертация завершена, начинаю транскрипцию...")
         
-        # Транскрипция с таймаутом
-        transcribe_start = time.time()
-        transcript = transcribe_with_timeout(wav_path, timeout_seconds=25)
+        # Транскрипция длинного аудио
+        transcript, successful_chunks, total_chunks, duration = transcribe_long_audio(wav_path)
         
-        logger.info(f"🎙️ Транскрипция завершена за {time.time() - transcribe_start:.1f}с")
-        
-        if not transcript or len(transcript.strip()) < 3:
-            return jsonify({"error": "Речь не распознана или слишком короткая"}), 400
+        if not transcript or len(transcript.strip()) < 10:
+            return jsonify({"error": "Не удалось получить транскрипцию"}), 400
 
-        # Резюме
-        summary = generate_summary_simple(transcript)
+        # Генерируем резюме
+        logger.info("📝 Генерирую резюме...")
+        summary = generate_long_summary(transcript)
         
         total_time = time.time() - start_time
-        logger.info(f"✅ Обработка завершена за {total_time:.1f}с")
+        logger.info(f"✅ Полная обработка завершена за {total_time/60:.1f} минут")
 
         return jsonify({
             "transcript": transcript,
             "summary": summary,
-            "model_used": "whisper-tiny",
-            "processing_time": f"{total_time:.1f}s",
-            "audio_duration": f"{len(audio)/1000:.1f}s"
+            "statistics": {
+                "processing_time": f"{total_time:.1f}s",
+                "processing_time_min": f"{total_time/60:.1f}min",
+                "audio_duration": f"{duration/60:.1f}min",
+                "file_size": f"{file_size / 1024 / 1024:.1f}MB",
+                "successful_chunks": successful_chunks,
+                "total_chunks": total_chunks,
+                "success_rate": f"{successful_chunks/total_chunks*100:.1f}%"
+            },
+            "model_used": "whisper-tiny-chunks"
         })
         
-    except TimeoutError as e:
-        logger.error(f"⏰ Таймаут: {e}")
-        return jsonify({"error": f"Обработка превысила лимит времени: {e}"}), 408
     except Exception as e:
         logger.error(f"❌ Ошибка обработки: {e}")
-        return jsonify({"error": f"Ошибка: {str(e)[:100]}"}), 500
+        return jsonify({"error": f"Ошибка: {str(e)[:150]}"}), 500
     finally:
         # Очистка файлов
         for path in [input_path, wav_path]:
