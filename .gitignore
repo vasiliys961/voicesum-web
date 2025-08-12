@@ -3,49 +3,13 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
-.Python
-env/
+.DS_Store
 venv/
 .venv/
-pip-log.txt
-pip-delete-this-directory.txt
-.pytest_cache
-.coverage
-.tox
-.nox
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.core
-
-# IDE
-.DS_Store
-.idea/
-.vscode/
-*.swp
-*.swo
-
-# Logs
-*.log
-
-# Temp files
-/temp/
 /tmp/
+/temp/
 *.wav
 *.mp3
-*.tmp
-
-# Environment
+*.log
 .env
 .python-version
