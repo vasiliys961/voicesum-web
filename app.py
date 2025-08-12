@@ -1,4 +1,4 @@
-# app.py - Исправленная версия для Koyeb
+# app.py - Оптимизированная версия для Koyeb
 from flask import Flask, render_template, request, jsonify
 import os
 import tempfile
@@ -9,16 +9,16 @@ import time
 import math
 import logging
 from httpx import Client as HttpxClient
+import gc
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__, static_folder="static", template_folder="templates")
-app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100 MB
+app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # Уменьшено до 50 MB
 
 # === Настройки ===
-# Получаем API ключ из переменных окружения (БЕЗОПАСНОСТЬ!)
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 if not OPENROUTER_API_KEY:
     logger.error("❌ OPENROUTER_API_KEY не найден в переменных окружения!")
@@ -28,32 +28,44 @@ os.makedirs(TEMP_DIR, exist_ok=True)
 
 logger.info(f"📁 Используется временная папка: {TEMP_DIR}")
 
-# === Загрузка модели Whisper (small) ===
-logger.info("🎙️ Загружаю модель Whisper (small)...")
-try:
-    whisper_model = whisper.load_model("small", device="cpu")
-    logger.info("✅ Модель Whisper загружена!")
-except Exception as e:
-    logger.error(f"❌ Ошибка загрузки Whisper: {e}")
-    whisper_model = None
+# === Глобальные переменные для моделей ===
+whisper_model = None
+llm_client = None
 
-# === Клиент OpenRouter (для генерации резюме) ===
-if OPENROUTER_API_KEY:
-    llm_client = OpenAI(
-        base_url="https://openrouter.ai/api/v1",
-        api_key=OPENROUTER_API_KEY,
-        http_client=HttpxClient(
-            proxies=None,
-            timeout=30.0,
-        ),
-    )
-else:
-    llm_client = None
+def initialize_models():
+    """Инициализация моделей при первом запросе"""
+    global whisper_model, llm_client
+    
+    if whisper_model is None:
+        logger.info("🎙️ Загружаю модель Whisper (small)...")
+        try:
+            whisper_model = whisper.load_model("small", device="cpu")
+            logger.info("✅ Модель Whisper загружена!")
+        except Exception as e:
+            logger.error(f"❌ Ошибка загрузки Whisper: {e}")
+            return False
+    
+    if llm_client is None and OPENROUTER_API_KEY:
+        try:
+            llm_client = OpenAI(
+                base_url="https://openrouter.ai/api/v1",
+                api_key=OPENROUTER_API_KEY,
+                http_client=HttpxClient(
+                    proxies=None,
+                    timeout=30.0,
+                ),
+            )
+            logger.info("✅ OpenRouter клиент инициализирован!")
+        except Exception as e:
+            logger.error(f"❌ Ошибка инициализации OpenRouter: {e}")
+            return False
+    
+    return True
 
 # === Вспомогательные функции ===
 
-def split_audio(wav_path, chunk_length_sec=300):
-    """Нарезка аудио на фрагменты по 5 минут"""
+def split_audio(wav_path, chunk_length_sec=240):  # Уменьшено до 4 минут
+    """Нарезка аудио на более короткие фрагменты"""
     try:
         audio = AudioSegment.from_wav(wav_path)
         chunk_length_ms = chunk_length_sec * 1000
@@ -68,6 +80,7 @@ def split_audio(wav_path, chunk_length_sec=300):
             chunk_path = os.path.join(TEMP_DIR, f"chunk_{i}_{int(time.time())}.wav")
             chunk.export(chunk_path, format="wav")
             chunks.append(chunk_path)
+        
         logger.info(f"✂️ Аудио нарезано на {len(chunks)} фрагментов по ~{chunk_length_sec} сек.")
         return chunks
     except Exception as e:
@@ -75,7 +88,7 @@ def split_audio(wav_path, chunk_length_sec=300):
         raise
 
 def transcribe_very_long_audio(wav_path):
-    """Транскрибирует длинное аудио с автоопределением языка"""
+    """Транскрибирует длинное аудио с освобождением памяти"""
     if not whisper_model:
         raise Exception("Модель Whisper не загружена")
         
@@ -99,6 +112,11 @@ def transcribe_very_long_audio(wav_path):
                 full_transcript += text + " "
             else:
                 full_transcript += f"[Фрагмент {i+1} — речь не распознана] "
+                
+            # Принудительная очистка памяти
+            del result
+            gc.collect()
+            
         except Exception as e:
             error_msg = f"[Ошибка фрагмента {i+1}: {str(e)[:50]}...] "
             full_transcript += error_msg
@@ -106,10 +124,11 @@ def transcribe_very_long_audio(wav_path):
         finally:
             if os.path.exists(chunk_path):
                 os.remove(chunk_path)
+    
     return full_transcript.strip()
 
 def generate_summary(text):
-    """Генерирует резюме по строгому формату"""
+    """Генерирует резюме с обработкой ошибок"""
     if not llm_client:
         return "Ошибка: API ключ OpenRouter не настроен"
         
@@ -130,22 +149,11 @@ def generate_summary(text):
                         f"Проанализируй разговор или доклад ниже и выдай результат строго в формате:\n"
                         f"Краткое резюме (1–2 предложения, максимум 220 символов).\n"
                         f"3–5 маркеров, каждый в одной строке, по категориям: решения / действия / договорённости / темы. Если категория не встречается — пропусти её. Если пунктов много — сгруппируй и оставь самое важное.\n"
-                        f"Требования к стилю:\n"
-                        f"Короткие фразы, глаголы в повелительном или инфинитиве (для действий).\n"
-                        f"Без оценочных суждений и советов, только факты из разговора.\n"
-                        f"Не повторяй одно и то же разными словами.\n"
-                        f"Не превышай 6 строк после резюме.\n"
-                        f"Формат вывода (строго):\n"
-                        f"Краткое резюме: <1–2 предложения>\n"
-                        f"— Решения: <кратко>\n"
-                        f"— Действия: <кратко>\n"
-                        f"— Договорённости: <кратко>\n"
-                        f"— Темы: <кратко>\n\n"
-                        f"Разговор:\n\n{text[:12000]}"
+                        f"Разговор:\n\n{text[:10000]}"  # Ограничено для экономии токенов
                     )
                 }
             ],
-            max_tokens=500,
+            max_tokens=400,
             temperature=0.2
         )
         return response.choices[0].message.content.strip()
@@ -170,8 +178,9 @@ def health():
 
 @app.route("/transcribe", methods=["POST"])
 def transcribe():
-    if not whisper_model:
-        return jsonify({"error": "Модель Whisper не загружена"}), 500
+    # Инициализация моделей при первом запросе
+    if not initialize_models():
+        return jsonify({"error": "Ошибка инициализации моделей"}), 500
         
     if 'audio' not in request.files:
         return jsonify({"error": "Файл не загружен"}), 400
@@ -180,7 +189,7 @@ def transcribe():
     if file.filename == '':
         return jsonify({"error": "Файл не выбран"}), 400
 
-    input_path = os.path.join(TEMP_DIR, file.filename)
+    input_path = os.path.join(TEMP_DIR, f"input_{int(time.time())}_{file.filename}")
     try:
         file.save(input_path)
         logger.info(f"📥 Файл сохранён: {input_path}")
@@ -189,7 +198,7 @@ def transcribe():
         return jsonify({"error": "Не удалось сохранить файл"}), 500
 
     # Конвертация в WAV 16kHz mono
-    wav_path = os.path.join(TEMP_DIR, f"{int(time.time())}.wav")
+    wav_path = os.path.join(TEMP_DIR, f"converted_{int(time.time())}.wav")
     try:
         audio = AudioSegment.from_file(input_path)
         audio = audio.set_frame_rate(16000).set_channels(1)
@@ -217,11 +226,12 @@ def transcribe():
         })
     except Exception as e:
         logger.error(f"❌ Ошибка обработки: {e}")
+        if os.path.exists(wav_path):
+            os.remove(wav_path)
         return jsonify({"error": f"Ошибка обработки: {e}"}), 500
 
 # === Запуск сервера ===
 if __name__ == "__main__":
-    # Для Koyeb используем переменную окружения PORT
     port = int(os.environ.get("PORT", 5000))
     logger.info(f"✅ Сервер запущен на порту: {port}")
     app.run(host="0.0.0.0", port=port, debug=False)
