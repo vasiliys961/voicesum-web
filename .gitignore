@@ -1,8 +1,12 @@
 __pycache__/
 *.pyc
-venv/
-.venv/
-/tmp/
-/temp/
+*.pyo
+*.pyd
+.DS_Store
+*.log
 *.wav
 *.mp3
+*.tmp
+venv/
+.venv/
+.env
