@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VoiceSum - AssemblyAI с записью микрофона</title>
+    <title>VoiceSum - Русская транскрипция</title>
     <style>
         * {
             margin: 0;
@@ -70,12 +70,6 @@
             background: #f0f8ff;
         }
 
-        .input-method.active {
-            border-color: #4facfe;
-            background: #f0f8ff;
-            border-style: solid;
-        }
-
         .method-title {
             font-size: 1.3rem;
             font-weight: 600;
@@ -116,11 +110,6 @@
             box-shadow: 0 8px 15px rgba(102, 126, 234, 0.3);
         }
 
-        /* Микрофон */
-        .microphone-section {
-            text-align: center;
-        }
-
         .mic-button {
             width: 80px;
             height: 80px;
@@ -131,11 +120,10 @@
             font-size: 2rem;
             cursor: pointer;
             transition: all 0.3s ease;
-            margin-bottom: 15px;
+            margin: 0 auto 15px;
             display: flex;
             align-items: center;
             justify-content: center;
-            margin: 0 auto 15px;
         }
 
         .mic-button:hover {
@@ -146,10 +134,6 @@
         .mic-button.recording {
             background: linear-gradient(135deg, #ee5a52 0%, #ff6b6b 100%);
             animation: pulse 1.5s infinite;
-        }
-
-        .mic-button.stopped {
-            background: linear-gradient(135deg, #95a5a6 0%, #7f8c8d 100%);
         }
 
         @keyframes pulse {
@@ -177,39 +161,6 @@
             font-weight: 600;
             color: #ff6b6b;
             margin-bottom: 10px;
-        }
-
-        .audio-visualizer {
-            display: none;
-            margin: 20px 0;
-        }
-
-        .audio-visualizer.show {
-            display: block;
-        }
-
-        .waveform {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            height: 60px;
-            gap: 3px;
-        }
-
-        .bar {
-            width: 4px;
-            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
-            border-radius: 2px;
-            animation: wave 1s infinite ease-in-out;
-        }
-
-        .bar:nth-child(2n) { animation-delay: 0.1s; }
-        .bar:nth-child(3n) { animation-delay: 0.2s; }
-        .bar:nth-child(4n) { animation-delay: 0.3s; }
-
-        @keyframes wave {
-            0%, 100% { height: 10px; }
-            50% { height: 40px; }
         }
 
         .recorded-audio {
@@ -405,7 +356,7 @@
     <div class="container">
         <div class="header">
             <h1>🎙️ VoiceSum</h1>
-            <p>Умная транскрипция с AI анализом - AssemblyAI с записью микрофона</p>
+            <p>Умная транскрипция больших файлов - до 200MB</p>
         </div>
         
         <div class="upload-section">
@@ -413,7 +364,7 @@
                 <!-- Загрузка файла -->
                 <div class="input-method" id="fileMethod">
                     <div class="method-title">📁 Загрузить файл</div>
-                    <div class="method-description">Выберите аудио или видео файл с устройства (до 500MB)</div>
+                    <div class="method-description">Выберите аудио или видео файл (до 200MB)</div>
                     
                     <div class="file-input-wrapper">
                         <input type="file" id="audioFile" class="file-input" accept="audio/*,video/*">
@@ -429,27 +380,12 @@
                     <div class="method-description">Запишите аудио прямо в браузере (до 30 минут)</div>
                     
                     <div class="microphone-section">
-                        <button class="mic-button" id="micButton" onclick="toggleRecording()">
-                            🎤
-                        </button>
+                        <button class="mic-button" id="micButton">🎤</button>
                         <div id="micStatus">Нажмите для записи</div>
                         
                         <div class="recording-info" id="recordingInfo">
                             <div class="recording-timer" id="recordingTimer">00:00</div>
                             <div>📢 Идет запись... Нажмите еще раз для остановки</div>
-                        </div>
-
-                        <div class="audio-visualizer" id="audioVisualizer">
-                            <div class="waveform">
-                                <div class="bar"></div>
-                                <div class="bar"></div>
-                                <div class="bar"></div>
-                                <div class="bar"></div>
-                                <div class="bar"></div>
-                                <div class="bar"></div>
-                                <div class="bar"></div>
-                                <div class="bar"></div>
-                            </div>
                         </div>
 
                         <div class="recorded-audio" id="recordedAudio">
@@ -462,9 +398,7 @@
             
             <div class="file-info" id="fileInfo"></div>
             
-            <button class="upload-btn" id="uploadBtn" onclick="uploadFile()">
-                🚀 Начать обработку
-            </button>
+            <button class="upload-btn" id="uploadBtn">🚀 Начать обработку</button>
             
             <div class="progress" id="progress">
                 <div class="progress-bar">
@@ -498,7 +432,7 @@
     </div>
 
     <script>
-        // Переменные для работы с файлами и записью
+        // Глобальные переменные
         const fileInput = document.getElementById('audioFile');
         const uploadBtn = document.getElementById('uploadBtn');
         const fileInfo = document.getElementById('fileInfo');
@@ -509,12 +443,11 @@
         const results = document.getElementById('results');
         const error = document.getElementById('error');
 
-        // Переменные для записи с микрофона
+        // Переменные для микрофона
         const micButton = document.getElementById('micButton');
         const micStatus = document.getElementById('micStatus');
         const recordingInfo = document.getElementById('recordingInfo');
         const recordingTimer = document.getElementById('recordingTimer');
-        const audioVisualizer = document.getElementById('audioVisualizer');
         const recordedAudio = document.getElementById('recordedAudio');
         const audioPlayer = document.getElementById('audioPlayer');
 
@@ -537,22 +470,35 @@
             }
         });
 
+        // Обработка клика на кнопку обработки
+        uploadBtn.addEventListener('click', uploadFile);
+
+        // Обработка записи с микрофона
+        micButton.addEventListener('click', toggleRecording);
+
         function showFileInfo(file) {
             const sizeMB = (file.size / 1024 / 1024).toFixed(1);
-            const estimatedMinutes = (sizeMB * 1).toFixed(1);
+            const estimatedMinutes = (sizeMB * 2).toFixed(1);
             
-            let warningMessage = '';
-            if (sizeMB > 50) {
-                warningMessage = '<br><strong style="color: #dc3545;">⚠️ Очень большой файл! Обработка может занять 10+ минут</strong>';
-            } else if (sizeMB > 20) {
-                warningMessage = '<br><strong style="color: #ffc107;">⚠️ Большой файл. Обработка может занять 5-10 минут</strong>';
+            let modeInfo = '';
+            
+            if (sizeMB < 10) {
+                modeInfo = '<br><strong style="color: #28a745;">⚡ Режим: Быстрая обработка (до 5 минут)</strong>';
+            } else if (sizeMB < 30) {
+                modeInfo = '<br><strong style="color: #17a2b8;">🔄 Режим: Стандартная обработка (до 10 минут)</strong>';
+            } else if (sizeMB < 60) {
+                modeInfo = '<br><strong style="color: #ffc107;">🐌 Режим: Медленная обработка (до 15 минут)</strong>';
+            } else if (sizeMB < 100) {
+                modeInfo = '<br><strong style="color: #fd7e14;">🦥 Режим: Очень медленная обработка (до 20 минут)</strong>';
+            } else {
+                modeInfo = '<br><strong style="color: #dc3545;">🐢 Режим: Ультра-медленная обработка (до 30 минут)</strong>';
             }
             
             fileInfo.innerHTML = `
                 <strong>📄 Файл:</strong> ${file.name}<br>
                 <strong>📏 Размер:</strong> ${sizeMB} MB<br>
                 <strong>⏱️ Примерное время:</strong> ~${estimatedMinutes} минут<br>
-                <strong>🔧 Метод:</strong> Гибридный подход AssemblyAI${warningMessage}
+                <strong>🔧 Метод:</strong> Умная обработка больших файлов${modeInfo}
             `;
             fileInfo.style.display = 'block';
             uploadBtn.classList.add('show');
@@ -560,7 +506,6 @@
             hideResults();
         }
 
-        // Запись с микрофона
         async function toggleRecording() {
             if (!isRecording) {
                 await startRecording();
@@ -571,68 +516,44 @@
 
         async function startRecording() {
             try {
-                // Проверяем поддержку
                 if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
                     throw new Error('Ваш браузер не поддерживает запись с микрофона');
                 }
 
-                // Запрашиваем разрешения с расширенными параметрами
-                console.log('Запрашиваем доступ к микрофону...');
-                
                 const stream = await navigator.mediaDevices.getUserMedia({ 
                     audio: {
                         echoCancellation: true,
                         noiseSuppression: true,
                         autoGainControl: true,
-                        sampleRate: 44100,
-                        channelCount: 1
+                        sampleRate: 44100
                     } 
                 });
                 
-                console.log('Доступ к микрофону получен');
-                
-                // Проверяем поддержку MediaRecorder
                 if (!window.MediaRecorder) {
                     throw new Error('MediaRecorder не поддерживается в вашем браузере');
                 }
 
-                // Определяем поддерживаемый формат
                 let mimeType = 'audio/webm;codecs=opus';
                 if (!MediaRecorder.isTypeSupported(mimeType)) {
                     mimeType = 'audio/webm';
                     if (!MediaRecorder.isTypeSupported(mimeType)) {
-                        mimeType = 'audio/ogg;codecs=opus';
-                        if (!MediaRecorder.isTypeSupported(mimeType)) {
-                            mimeType = 'audio/mp4';
-                            if (!MediaRecorder.isTypeSupported(mimeType)) {
-                                mimeType = ''; // Используем по умолчанию
-                            }
-                        }
+                        mimeType = '';
                     }
                 }
-
-                console.log('Используемый MIME тип:', mimeType || 'default');
                 
-                mediaRecorder = new MediaRecorder(stream, mimeType ? {
-                    mimeType: mimeType
-                } : {});
-                
+                mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : {});
                 audioChunks = [];
                 
                 mediaRecorder.ondataavailable = function(event) {
-                    console.log('Получены данные:', event.data.size, 'байт');
                     if (event.data.size > 0) {
                         audioChunks.push(event.data);
                     }
                 };
                 
                 mediaRecorder.onstop = function() {
-                    console.log('Запись остановлена, обрабатываем данные...');
                     const audioBlob = new Blob(audioChunks, { 
                         type: mimeType || 'audio/webm' 
                     });
-                    
-                    console.log('Создан blob размером:', audioBlob.size, 'байт');
                     
                     currentAudioBlob = audioBlob;
                     currentFile = null;
@@ -643,50 +564,35 @@
                     recordedAudio.classList.add('show');
                     showRecordedFileInfo(audioBlob);
                     
-                    // Останавливаем все треки
-                    stream.getTracks().forEach(track => {
-                        track.stop();
-                        console.log('Трек остановлен:', track.kind);
-                    });
+                    stream.getTracks().forEach(track => track.stop());
                 };
 
                 mediaRecorder.onerror = function(event) {
                     console.error('Ошибка MediaRecorder:', event);
-                    showError('Ошибка при записи: ' + (event.error ? event.error.message : 'неизвестная ошибка'));
+                    showError('Ошибка при записи');
                 };
                 
-                mediaRecorder.start(1000); // Сохраняем данные каждую секунду
+                mediaRecorder.start(1000);
                 isRecording = true;
                 recordingStartTime = Date.now();
                 
-                console.log('Запись началась');
                 updateRecordingUI();
                 startTimer();
                 
             } catch (error) {
-                console.error('Error accessing microphone:', error);
+                console.error('Ошибка доступа к микрофону:', error);
                 
                 let errorMessage = 'Не удалось получить доступ к микрофону.';
                 
-                if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
-                    errorMessage = 'Доступ к микрофону запрещен. Проверьте настройки браузера:\n\n1. Нажмите на иконку замка/камеры в адресной строке\n2. Разрешите доступ к микрофону\n3. Обновите страницу и попробуйте снова';
-                } else if (error.name === 'NotFoundError' || error.name === 'DevicesNotFoundError') {
-                    errorMessage = 'Микрофон не найден. Убедитесь, что микрофон подключен и работает.';
-                } else if (error.name === 'NotReadableError' || error.name === 'TrackStartError') {
-                    errorMessage = 'Микрофон используется другим приложением. Закройте другие программы, использующие микрофон.';
-                } else if (error.name === 'OverconstrainedError' || error.name === 'ConstraintNotSatisfiedError') {
-                    errorMessage = 'Настройки микрофона не поддерживаются. Попробуйте другой микрофон.';
-                } else if (error.name === 'NotSupportedError') {
-                    errorMessage = 'Запись не поддерживается в вашем браузере. Используйте Chrome, Firefox или Safari.';
-                } else if (error.name === 'SecurityError') {
-                    errorMessage = 'Ошибка безопасности. Убедитесь, что сайт загружен по HTTPS.';
-                } else {
-                    errorMessage += '\n\nДетали: ' + error.message;
+                if (error.name === 'NotAllowedError') {
+                    errorMessage = 'Доступ к микрофону запрещен. Разрешите доступ в настройках браузера.';
+                } else if (error.name === 'NotFoundError') {
+                    errorMessage = 'Микрофон не найден. Подключите микрофон.';
+                } else if (error.name === 'NotReadableError') {
+                    errorMessage = 'Микрофон используется другим приложением.';
                 }
                 
                 showError(errorMessage);
-                
-                // Сбрасываем UI
                 isRecording = false;
                 updateRecordingUI();
             }
@@ -707,24 +613,20 @@
                 micButton.innerHTML = '⏹️';
                 micStatus.textContent = 'Запись... Нажмите для остановки';
                 recordingInfo.classList.add('show');
-                audioVisualizer.classList.add('show');
                 recordedAudio.classList.remove('show');
             } else {
                 micButton.classList.remove('recording');
-                micButton.classList.add('stopped');
                 micButton.innerHTML = '🎤';
-                micStatus.textContent = isRecording ? 'Нажмите для записи' : 'Запись завершена';
+                micStatus.textContent = 'Нажмите для записи';
                 recordingInfo.classList.remove('show');
-                audioVisualizer.classList.remove('show');
             }
         }
 
         function resetRecordingUI() {
-            micButton.classList.remove('recording', 'stopped');
+            micButton.classList.remove('recording');
             micButton.innerHTML = '🎤';
             micStatus.textContent = 'Нажмите для записи';
             recordingInfo.classList.remove('show');
-            audioVisualizer.classList.remove('show');
             recordedAudio.classList.remove('show');
             if (recordingInterval) {
                 clearInterval(recordingInterval);
@@ -739,7 +641,6 @@
                     const seconds = Math.floor((elapsed % 60000) / 1000);
                     recordingTimer.textContent = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
                     
-                    // Автоматическая остановка через 30 минут
                     if (minutes >= 30) {
                         stopRecording();
                         showError('Запись остановлена автоматически (максимум 30 минут)');
@@ -757,14 +658,14 @@
 
         function showRecordedFileInfo(blob) {
             const sizeMB = (blob.size / 1024 / 1024).toFixed(1);
-            const estimatedMinutes = (blob.size / (1024 * 1024 * 0.5)).toFixed(1); // Примерная оценка для audio
+            const estimatedMinutes = (blob.size / (1024 * 1024 * 0.5)).toFixed(1);
             
             fileInfo.innerHTML = `
                 <strong>📄 Тип:</strong> Запись с микрофона<br>
                 <strong>📏 Размер:</strong> ${sizeMB} MB<br>
                 <strong>⏱️ Примерное время:</strong> ~${estimatedMinutes} минут<br>
-                <strong>🔧 Метод:</strong> Гибридный подход AssemblyAI<br>
-                <strong>🎵 Формат:</strong> WebM (Opus)
+                <strong>🔧 Метод:</strong> Обработка записи микрофона<br>
+                <strong>🎵 Формат:</strong> WebM
             `;
             fileInfo.style.display = 'block';
             uploadBtn.classList.add('show');
@@ -772,12 +673,10 @@
             hideResults();
         }
 
-        // Загрузка файла
         async function uploadFile() {
             let fileToUpload;
             let fileName;
 
-            // Определяем источник файла
             if (currentFile) {
                 fileToUpload = currentFile;
                 fileName = currentFile.name;
@@ -791,33 +690,53 @@
                 return;
             }
 
-            // Скрываем предыдущие результаты
             hideError();
             hideResults();
             
-            // Показываем прогресс
             progress.style.display = 'block';
             processingStatus.style.display = 'block';
             uploadBtn.disabled = true;
             uploadBtn.textContent = '⏳ Обрабатываем...';
 
-            // Анимация прогресса
             let progressValue = 0;
             const progressInterval = setInterval(() => {
-                progressValue += Math.random() * 15;
+                progressValue += Math.random() * 10;
                 if (progressValue > 90) progressValue = 90;
                 progressFill.style.width = progressValue + '%';
-            }, 1000);
+            }, 2000);
 
-            // Обновляем статус
-            const statusMessages = [
-                'Загружаем файл на сервер...',
-                'Пробуем автообнаружение языка...',
-                'Выполняем транскрипцию...',
-                'Анализируем содержимое...',
-                'Генерируем умное резюме...',
-                'Финализируем результаты...'
-            ];
+            const sizeMB = fileToUpload.size / 1024 / 1024;
+            let statusMessages;
+            let intervalTime;
+            
+            if (sizeMB < 10) {
+                statusMessages = [
+                    'Загружаем файл на сервер...',
+                    'Быстрая транскрипция...',
+                    'Анализируем содержимое...',
+                    'Генерируем резюме...'
+                ];
+                intervalTime = 5000;
+            } else if (sizeMB < 30) {
+                statusMessages = [
+                    'Загружаем файл на сервер...',
+                    'Стандартная обработка...',
+                    'Транскрибируем аудио...',
+                    'Анализируем текст...',
+                    'Генерируем умное резюме...'
+                ];
+                intervalTime = 8000;
+            } else {
+                statusMessages = [
+                    'Загружаем большой файл...',
+                    'Начинаем медленную обработку...',
+                    'Транскрибируем длинное аудио...',
+                    'Это займет время, ожидайте...',
+                    'Анализируем большой объем текста...',
+                    'Генерируем подробное резюме...'
+                ];
+                intervalTime = 15000;
+            }
             
             let statusIndex = 0;
             const statusInterval = setInterval(() => {
@@ -825,7 +744,7 @@
                     statusText.textContent = statusMessages[statusIndex];
                     statusIndex++;
                 }
-            }, 8000);
+            }, intervalTime);
 
             try {
                 const formData = new FormData();
@@ -834,7 +753,7 @@
                 const response = await fetch('/transcribe', {
                     method: 'POST',
                     body: formData,
-                    signal: AbortSignal.timeout(900000) // 15 минут для больших файлов
+                    signal: AbortSignal.timeout(2100000) // 35 минут
                 });
 
                 clearInterval(progressInterval);
@@ -849,7 +768,7 @@
                             errorMessage = errorData.error;
                         }
                     } catch (e) {
-                        // Если не можем парсить JSON ошибки, используем статус
+                        // Игнорируем ошибки парсинга
                     }
                     throw new Error(errorMessage);
                 }
@@ -857,11 +776,9 @@
                 let data;
                 try {
                     const responseText = await response.text();
-                    console.log('Raw response length:', responseText.length);
                     data = JSON.parse(responseText);
                 } catch (parseError) {
-                    console.error('JSON Parse Error:', parseError);
-                    throw new Error('Сервер вернул некорректные данные. Попробуйте еще раз или используйте файл меньшего размера.');
+                    throw new Error('Сервер вернул некорректные данные. Попробуйте файл меньшего размера.');
                 }
 
                 displayResults(data);
@@ -889,7 +806,6 @@
         }
 
         function displayResults(data) {
-            // Статистика
             const stats = document.getElementById('stats');
             const statistics = data.statistics || {};
             
@@ -916,81 +832,4 @@
                 </div>
                 <div class="stat-item">
                     <div class="stat-value">${statistics.credits_used || 'N/A'}</div>
-                    <div class="stat-label">💰 Стоимость</div>
-                </div>
-            `;
-
-            // Добавляем предупреждение об обрезке если нужно
-            if (statistics.transcript_truncated) {
-                stats.innerHTML += `
-                    <div class="stat-item" style="grid-column: 1 / -1; background: #fff3cd; border-left: 4px solid #ffc107;">
-                        <div style="color: #856404;">⚠️ Транскрипт обрезан для оптимизации отображения</div>
-                    </div>
-                `;
-            }
-
-            // Резюме
-            document.getElementById('summary').innerHTML = `<pre style="white-space: pre-wrap; font-family: inherit;">${data.summary || 'Резюме недоступно'}</pre>`;
-
-            // Транскрипция
-            document.getElementById('transcript').textContent = data.transcript || 'Транскрипция недоступна';
-
-            results.style.display = 'block';
-            results.scrollIntoView({ behavior: 'smooth' });
-        }
-
-        function showError(message) {
-            error.textContent = message;
-            error.style.display = 'block';
-            error.scrollIntoView({ behavior: 'smooth' });
-        }
-
-        function hideError() {
-            error.style.display = 'none';
-        }
-
-        function hideResults() {
-            results.style.display = 'none';
-        }
-
-        // Проверка поддержки медиа API при загрузке страницы
-        window.addEventListener('DOMContentLoaded', function() {
-            checkMicrophoneSupport();
-        });
-
-        async function checkMicrophoneSupport() {
-            const micMethod = document.getElementById('micMethod');
-            
-            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-                micMethod.innerHTML = `
-                    <div class="method-title">🎤 Записать с микрофона</div>
-                    <div class="method-description" style="color: #dc3545;">
-                        ❌ Ваш браузер не поддерживает запись с микрофона.<br>
-                        Используйте Chrome, Firefox или Safari для записи.
-                    </div>
-                `;
-                return;
-            }
-
-            // Проверяем доступность устройств
-            try {
-                const devices = await navigator.mediaDevices.enumerateDevices();
-                const hasAudioInput = devices.some(device => device.kind === 'audioinput');
-                
-                if (!hasAudioInput) {
-                    micMethod.innerHTML = `
-                        <div class="method-title">🎤 Записать с микрофона</div>
-                        <div class="method-description" style="color: #ffc107;">
-                            ⚠️ Микрофон не обнаружен.<br>
-                            Подключите микрофон и обновите страницу.
-                        </div>
-                    `;
-                }
-            } catch (error) {
-                console.log('Не удалось проверить устройства:', error);
-                // Не показываем ошибку, так как это может быть из-за отсутствия разрешений
-            }
-        }
-    </script>
-</body>
-</html>
+                    <div class="stat-label">💰 Ст
