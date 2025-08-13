@@ -541,11 +541,18 @@
             const sizeMB = (file.size / 1024 / 1024).toFixed(1);
             const estimatedMinutes = (sizeMB * 1).toFixed(1);
             
+            let warningMessage = '';
+            if (sizeMB > 50) {
+                warningMessage = '<br><strong style="color: #dc3545;">⚠️ Очень большой файл! Обработка может занять 10+ минут</strong>';
+            } else if (sizeMB > 20) {
+                warningMessage = '<br><strong style="color: #ffc107;">⚠️ Большой файл. Обработка может занять 5-10 минут</strong>';
+            }
+            
             fileInfo.innerHTML = `
                 <strong>📄 Файл:</strong> ${file.name}<br>
                 <strong>📏 Размер:</strong> ${sizeMB} MB<br>
                 <strong>⏱️ Примерное время:</strong> ~${estimatedMinutes} минут<br>
-                <strong>🔧 Метод:</strong> Гибридный подход AssemblyAI
+                <strong>🔧 Метод:</strong> Гибридный подход AssemblyAI${warningMessage}
             `;
             fileInfo.style.display = 'block';
             uploadBtn.classList.add('show');
@@ -827,7 +834,7 @@
                 const response = await fetch('/transcribe', {
                     method: 'POST',
                     body: formData,
-                    signal: AbortSignal.timeout(300000) // 5 минут
+                    signal: AbortSignal.timeout(900000) // 15 минут для больших файлов
                 });
 
                 clearInterval(progressInterval);
