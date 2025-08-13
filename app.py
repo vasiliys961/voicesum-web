@@ -1,4 +1,4 @@
-# app.py - Полная версия с гибридным подходом AssemblyAI
+# app.py - Исправленная версия с гибридным подходом AssemblyAI
 from flask import Flask, render_template, request, jsonify
 import os
 import tempfile
@@ -6,6 +6,8 @@ import assemblyai as aai
 from openai import OpenAI
 import time
 import logging
+import signal
+import sys
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -32,22 +34,22 @@ def get_transcription_config_auto():
         speech_model=aai.SpeechModel.best,  # Лучшая модель
         # language_code НЕ указываем - автообнаружение
         
-        # === AI функции (все включены для автообнаружения) ===
+        # === AI функции (ИСПРАВЛЕНО: убран конфликт) ===
         speaker_labels=True,  # Определение спикеров
         speakers_expected=2,  # Ожидаемое количество
         
         auto_highlights=True,  # Ключевые моменты
-        auto_chapters=True,   # Автоматические главы
+        # ИСПРАВЛЕНИЕ: Выбираем ЛИБО auto_chapters, ЛИБО summarization
+        summarization=True,       # Встроенное резюме
+        summary_model=aai.SummarizationModel.informative,
+        summary_type=aai.SummarizationType.bullets,
+        # auto_chapters=True,   # ОТКЛЮЧЕНО из-за конфликта с summarization
         
         sentiment_analysis=True,  # Анализ эмоций
         entity_detection=True,    # Определение сущностей
         
         content_safety=True,      # Модерация контента
         iab_categories=True,      # Категоризация по темам
-        
-        summarization=True,       # Встроенное резюме
-        summary_model=aai.SummarizationModel.informative,
-        summary_type=aai.SummarizationType.bullets,
         
         # === Настройки качества ===
         punctuate=True,          # Пунктуация
@@ -58,6 +60,36 @@ def get_transcription_config_auto():
         disfluencies=False,      # Убираем "эм", "ах"
         filter_profanity=False,  # Не фильтруем мат
         redact_pii=False,        # Не скрываем персональные данные
+    )
+
+def get_transcription_config_auto_chapters():
+    """Альтернативная конфигурация с главами вместо резюме"""
+    return aai.TranscriptionConfig(
+        # === Основные настройки ===
+        speech_model=aai.SpeechModel.best,
+        
+        # === AI функции с главами ===
+        speaker_labels=True,
+        speakers_expected=2,
+        
+        auto_highlights=True,
+        auto_chapters=True,       # Главы вместо резюме
+        # summarization НЕ включаем
+        
+        sentiment_analysis=True,
+        entity_detection=True,
+        content_safety=True,
+        iab_categories=True,
+        
+        # === Настройки качества ===
+        punctuate=True,
+        format_text=True,
+        dual_channel=False,
+        
+        # === Дополнительные функции ===
+        disfluencies=False,
+        filter_profanity=False,
+        redact_pii=False,
     )
 
 def get_transcription_config_russian():
@@ -85,11 +117,11 @@ def get_transcription_config_russian():
     )
 
 def transcribe_with_fallback(file_path):
-    """Транскрипция с fallback: сначала авто, потом русский"""
+    """Улучшенная транскрипция с множественным fallback"""
     
-    # Пробуем с автообнаружением (все функции)
+    # Стратегия 1: Автообнаружение с резюме
     try:
-        logger.info("🌍 Пробую транскрипцию с автообнаружением языка (все AI функции)...")
+        logger.info("🌍 Пробую автообнаружение языка с резюме...")
         config_auto = get_transcription_config_auto()
         transcriber = aai.Transcriber(config=config_auto)
         transcript = transcriber.transcribe(file_path)
@@ -97,30 +129,46 @@ def transcribe_with_fallback(file_path):
         if transcript.status == aai.TranscriptStatus.error:
             raise RuntimeError(f"Ошибка автообнаружения: {transcript.error}")
         
-        logger.info("✅ Транскрипция с автообнаружением успешна!")
-        return transcript, "auto_detection_full_features"
+        logger.info("✅ Транскрипция с автообнаружением (резюме) успешна!")
+        return transcript, "auto_detection_summary"
         
     except Exception as e:
-        logger.warning(f"⚠️ Автообнаружение не сработало: {e}")
+        logger.warning(f"⚠️ Автообнаружение с резюме не сработало: {e}")
         
-        # Fallback: русский язык (ограниченные функции)
+        # Стратегия 2: Автообнаружение с главами
         try:
-            logger.info("🇷🇺 Переключаюсь на русский язык (ограниченные функции)...")
-            config_ru = get_transcription_config_russian()
-            transcriber = aai.Transcriber(config=config_ru)
+            logger.info("🌍 Пробую автообнаружение языка с главами...")
+            config_chapters = get_transcription_config_auto_chapters()
+            transcriber = aai.Transcriber(config=config_chapters)
             transcript = transcriber.transcribe(file_path)
             
             if transcript.status == aai.TranscriptStatus.error:
-                raise RuntimeError(f"Ошибка русского: {transcript.error}")
+                raise RuntimeError(f"Ошибка автообнаружения с главами: {transcript.error}")
             
-            logger.info("✅ Транскрипция на русском успешна!")
-            return transcript, "russian_limited_features"
+            logger.info("✅ Транскрипция с автообнаружением (главы) успешна!")
+            return transcript, "auto_detection_chapters"
             
         except Exception as e2:
-            logger.error(f"❌ Оба метода не сработали: {e2}")
-            raise RuntimeError(f"Не удалось транскрибировать: авто({e}), русский({e2})")
+            logger.warning(f"⚠️ Автообнаружение с главами не сработало: {e2}")
+            
+            # Стратегия 3: Русский язык (fallback)
+            try:
+                logger.info("🇷🇺 Переключаюсь на русский язык (ограниченные функции)...")
+                config_ru = get_transcription_config_russian()
+                transcriber = aai.Transcriber(config=config_ru)
+                transcript = transcriber.transcribe(file_path)
+                
+                if transcript.status == aai.TranscriptStatus.error:
+                    raise RuntimeError(f"Ошибка русского: {transcript.error}")
+                
+                logger.info("✅ Транскрипция на русском успешна!")
+                return transcript, "russian_limited_features"
+                
+            except Exception as e3:
+                logger.error(f"❌ Все методы не сработали: авто-резюме({e}), авто-главы({e2}), русский({e3})")
+                raise RuntimeError(f"Не удалось транскрибировать файл всеми доступными методами")
 
-# === Умный генератор резюме ===
+# === Улучшенный генератор резюме ===
 class AdvancedSummarizer:
     def __init__(self, openrouter_key):
         self.client = OpenAI(
@@ -134,6 +182,9 @@ class AdvancedSummarizer:
             return self._create_basic_summary(transcript_result, transcription_method)
         
         try:
+            # Таймаут для генерации резюме
+            timeout_seconds = 60
+            
             # Собираем все данные
             transcript = transcript_result.text
             chapters = getattr(transcript_result, 'chapters', None) or []
@@ -143,14 +194,14 @@ class AdvancedSummarizer:
             builtin_summary = getattr(transcript_result, 'summary', None)
             detected_language = getattr(transcript_result, 'language_code', 'unknown')
             
-            # Формируем богатый контекст
-            context = f"ПОЛНЫЙ ТРАНСКРИПТ:\n{transcript[:25000]}\n\n"
+            # Формируем богатый контекст (ограничиваем размер)
+            context = f"ПОЛНЫЙ ТРАНСКРИПТ:\n{transcript[:20000]}\n\n"
             context += f"МЕТОД ТРАНСКРИПЦИИ: {transcription_method}\n"
             context += f"ОПРЕДЕЛЕННЫЙ ЯЗЫК: {detected_language}\n\n"
             
             if chapters:
                 context += "📚 АВТОМАТИЧЕСКИЕ ГЛАВЫ:\n"
-                for i, chapter in enumerate(chapters[:10], 1):
+                for i, chapter in enumerate(chapters[:8], 1):
                     headline = getattr(chapter, 'headline', f'Глава {i}')
                     start_time = getattr(chapter, 'start', 0) / 1000 / 60  # в минутах
                     context += f"{i}. {headline} ({start_time:.1f}мин)\n"
@@ -158,17 +209,16 @@ class AdvancedSummarizer:
             
             if highlights and hasattr(highlights, 'results'):
                 context += "💡 КЛЮЧЕВЫЕ МОМЕНТЫ:\n"
-                for highlight in highlights.results[:15]:
+                for highlight in highlights.results[:10]:
                     text = getattr(highlight, 'text', '')
-                    rank = getattr(highlight, 'rank', 0)
                     if text:
-                        context += f"• {text} (важность: {rank:.2f})\n"
+                        context += f"• {text}\n"
                 context += "\n"
             
             if entities:
                 context += "🏷️ УПОМЯНУТЫЕ СУЩНОСТИ:\n"
                 entity_groups = {}
-                for entity in entities[:25]:
+                for entity in entities[:20]:
                     entity_type = getattr(entity, 'entity_type', 'other')
                     entity_text = getattr(entity, 'text', '')
                     if entity_type not in entity_groups:
@@ -177,79 +227,43 @@ class AdvancedSummarizer:
                         entity_groups[entity_type].append(entity_text)
                 
                 for entity_type, texts in entity_groups.items():
-                    context += f"  {entity_type}: {', '.join(texts[:5])}\n"
+                    context += f"  {entity_type}: {', '.join(texts[:3])}\n"
                 context += "\n"
             
             if builtin_summary:
                 context += f"🤖 БАЗОВОЕ РЕЗЮМЕ ASSEMBLYAI:\n{builtin_summary}\n\n"
             
-            # Анализ тональности
-            if sentiment:
-                positive_count = sum(1 for s in sentiment if getattr(s, 'sentiment', '') == 'POSITIVE')
-                negative_count = sum(1 for s in sentiment if getattr(s, 'sentiment', '') == 'NEGATIVE')
-                total_sentiment = len(sentiment)
-                if total_sentiment > 0:
-                    context += f"🎭 ОБЩАЯ ТОНАЛЬНОСТЬ: {positive_count}/{total_sentiment} позитивных, {negative_count}/{total_sentiment} негативных\n\n"
-            
             # Определяем язык контента для адаптации промпта
             content_language = detected_language if detected_language != 'unknown' else 'неизвестный'
             
-            # Адаптируем промпт в зависимости от метода транскрипции
-            if transcription_method == "auto_detection_full_features":
-                system_prompt = (
-                    f"Ты - профессиональный аналитик аудиоконтента с доступом к полному набору AI-анализа. "
-                    f"Транскрипт выполнен на языке: {content_language}. "
-                    f"Используй все предоставленные данные: главы, ключевые моменты, тональность, сущности. "
-                    f"ВАЖНО: Создай подробное структурированное резюме СТРОГО НА РУССКОМ ЯЗЫКЕ, "
-                    f"даже если исходный контент на другом языке. Переведи все ключевые моменты и выводы."
-                )
-            else:
-                system_prompt = (
-                    f"Ты - профессиональный аналитик аудиоконтента. Транскрипт выполнен на русском языке. "
-                    f"У тебя есть транскрипт и базовая информация о сущностях и спикерах. "
-                    f"Создай подробное структурированное резюме НА РУССКОМ ЯЗЫКЕ, "
-                    f"максимально используя доступную информацию."
-                )
-            
-            system_prompt += f"""
+            system_prompt = f"""Ты - профессиональный аналитик аудиоконтента. 
+Транскрипт выполнен на языке: {content_language}. Метод: {transcription_method}.
 
-ВАЖНЫЕ УКАЗАНИЯ:
-- РЕЗЮМЕ ДОЛЖНО БЫТЬ СТРОГО НА РУССКОМ ЯЗЫКЕ
-- Если исходный контент на {content_language}, переведи ключевые моменты
-- Имена собственные можно оставлять в оригинале, но с пояснениями на русском
-- Технические термины переводи или поясняй на русском
+ВАЖНО: Создай подробное структурированное резюме СТРОГО НА РУССКОМ ЯЗЫКЕ.
 
 СТРУКТУРА РЕЗЮМЕ:
-📋 КРАТКОЕ РЕЗЮМЕ (2-3 предложения - суть записи)
+📋 КРАТКОЕ РЕЗЮМЕ (2-3 предложения)
 🌍 ЯЗЫК КОНТЕНТА: {content_language}
-🎯 ОСНОВНЫЕ ТЕМЫ И РАЗДЕЛЫ (с временными метками если есть)
-👥 УЧАСТНИКИ И РОЛИ (если определены спикеры)
-💡 КЛЮЧЕВЫЕ ИНСАЙТЫ И ВЫВОДЫ
-📊 ВАЖНЫЕ ФАКТЫ, ЦИФРЫ, ДАТЫ
-🎭 ЭМОЦИОНАЛЬНАЯ ТОНАЛЬНОСТЬ (если доступна)
-✅ РЕШЕНИЯ, ДЕЙСТВИЯ, NEXT STEPS
-🏷️ КЛЮЧЕВЫЕ ПЕРСОНЫ И ОРГАНИЗАЦИИ
+🎯 ОСНОВНЫЕ ТЕМЫ (с временными метками если есть)
+👥 УЧАСТНИКИ (если определены спикеры)
+💡 КЛЮЧЕВЫЕ ИНСАЙТЫ
+📊 ВАЖНЫЕ ФАКТЫ И ЦИФРЫ
+🎭 ЭМОЦИОНАЛЬНАЯ ТОНАЛЬНОСТЬ
+✅ РЕШЕНИЯ И ДЕЙСТВИЯ
+🏷️ КЛЮЧЕВЫЕ ПЕРСОНЫ
 
-ТРЕБОВАНИЯ:
-- ВСЕ РЕЗЮМЕ НА РУССКОМ ЯЗЫКЕ
-- Используй эмодзи для структуры
-- Будь конкретным и информативным
-- Выдели самое важное
-- Сохраняй профессиональный тон
-- Переводи иностранные термины и понятия
-- Не повторяй информацию
-- Используй все доступные данные от AssemblyAI
-"""
+Используй эмодзи, будь конкретным, переводи на русский язык."""
             
-            # Генерируем умное резюме
+            # Генерируем умное резюме с таймаутом
             response = self.client.chat.completions.create(
                 model="anthropic/claude-3-haiku",
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": context}
                 ],
-                max_tokens=1500,
-                temperature=0.3
+                max_tokens=1200,
+                temperature=0.3,
+                timeout=timeout_seconds
             )
             
             return response.choices[0].message.content.strip()
@@ -263,19 +277,11 @@ class AdvancedSummarizer:
         summary_parts = []
         detected_language = getattr(transcript_result, 'language_code', 'unknown')
         
-        # Определяем язык контента
         language_names = {
-            'en': 'английский',
-            'ru': 'русский', 
-            'es': 'испанский',
-            'fr': 'французский',
-            'de': 'немецкий',
-            'it': 'итальянский',
-            'pt': 'португальский',
-            'zh': 'китайский',
-            'ja': 'японский',
-            'ko': 'корейский',
-            'unknown': 'не определен'
+            'en': 'английский', 'ru': 'русский', 'es': 'испанский',
+            'fr': 'французский', 'de': 'немецкий', 'it': 'итальянский',
+            'pt': 'португальский', 'zh': 'китайский', 'ja': 'японский',
+            'ko': 'корейский', 'unknown': 'не определен'
         }
         
         language_display = language_names.get(detected_language, detected_language)
@@ -283,59 +289,43 @@ class AdvancedSummarizer:
         summary_parts.append(f"🔧 МЕТОД ОБРАБОТКИ: {transcription_method}")
         summary_parts.append(f"🌍 ЯЗЫК КОНТЕНТА: {language_display}")
         
-        # Встроенное резюме (переводим если нужно)
+        # Встроенное резюме
         builtin_summary = getattr(transcript_result, 'summary', None)
         if builtin_summary:
-            if detected_language != 'ru' and detected_language != 'unknown':
-                summary_parts.append(f"\n📋 БАЗОВОЕ РЕЗЮМЕ (автоперевод с {language_display}):")
-                summary_parts.append(f"[ОРИГИНАЛ] {builtin_summary}")
-                summary_parts.append("📝 Для детального анализа на русском см. умное резюме выше")
-            else:
-                summary_parts.append(f"\n📋 БАЗОВОЕ РЕЗЮМЕ:\n{builtin_summary}")
+            summary_parts.append(f"\n📋 БАЗОВОЕ РЕЗЮМЕ:\n{builtin_summary}")
         
-        # Главы (переводим заголовки если нужно)
+        # Главы
         chapters = getattr(transcript_result, 'chapters', None)
         if chapters:
             summary_parts.append("\n🎯 ОСНОВНЫЕ РАЗДЕЛЫ:")
-            for i, chapter in enumerate(chapters[:8], 1):
+            for i, chapter in enumerate(chapters[:6], 1):
                 headline = getattr(chapter, 'headline', f'Раздел {i}')
                 start_time = getattr(chapter, 'start', 0) / 1000 / 60
-                
-                if detected_language != 'ru' and detected_language != 'unknown':
-                    summary_parts.append(f"{i}. [{headline}] ({start_time:.1f}мин)")
-                else:
-                    summary_parts.append(f"{i}. {headline} ({start_time:.1f}мин)")
+                summary_parts.append(f"{i}. {headline} ({start_time:.1f}мин)")
         
-        # Ключевые моменты (показываем с пометкой о языке)
+        # Ключевые моменты
         highlights = getattr(transcript_result, 'auto_highlights', None)
         if highlights and hasattr(highlights, 'results'):
-            summary_parts.append(f"\n💡 КЛЮЧЕВЫЕ МОМЕНТЫ (на {language_display}):")
-            for highlight in highlights.results[:10]:
+            summary_parts.append(f"\n💡 КЛЮЧЕВЫЕ МОМЕНТЫ:")
+            for highlight in highlights.results[:8]:
                 text = getattr(highlight, 'text', '').strip()
                 if text:
                     summary_parts.append(f"• {text}")
         
-        # Сущности (всегда доступны, группируем и переводим названия типов)
+        # Сущности
         entities = getattr(transcript_result, 'entities', None)
         if entities:
             summary_parts.append("\n🏷️ УПОМЯНУТЫЕ СУЩНОСТИ:")
             entity_groups = {}
             
-            # Перевод типов сущностей
             entity_type_translation = {
-                'person': 'Люди',
-                'organization': 'Организации', 
-                'location': 'Места',
-                'date': 'Даты',
-                'money': 'Деньги',
-                'phone_number': 'Телефоны',
-                'email': 'Email',
-                'product': 'Продукты',
-                'event': 'События',
-                'other': 'Прочее'
+                'person': 'Люди', 'organization': 'Организации', 
+                'location': 'Места', 'date': 'Даты', 'money': 'Деньги',
+                'phone_number': 'Телефоны', 'email': 'Email',
+                'product': 'Продукты', 'event': 'События', 'other': 'Прочее'
             }
             
-            for entity in entities[:15]:
+            for entity in entities[:12]:
                 entity_type = getattr(entity, 'entity_type', 'other')
                 entity_text = getattr(entity, 'text', '')
                 translated_type = entity_type_translation.get(entity_type, entity_type)
@@ -349,10 +339,6 @@ class AdvancedSummarizer:
                 if texts:
                     summary_parts.append(f"  {entity_type}: {', '.join(texts[:3])}")
         
-        # Добавляем примечание о языке
-        if detected_language != 'ru' and detected_language != 'unknown':
-            summary_parts.append(f"\n📝 ПРИМЕЧАНИЕ: Исходный контент на {language_display}. Для полного анализа на русском языке используется умное резюме выше.")
-        
         if not summary_parts:
             summary_parts.append("📋 Базовое резюме недоступно")
         
@@ -361,7 +347,7 @@ class AdvancedSummarizer:
 # === Инициализация ===
 summarizer = AdvancedSummarizer(OPENROUTER_API_KEY)
 
-# === Вспомогательные функции ===
+# === Улучшенные вспомогательные функции ===
 def analyze_sentiment_overall(sentiment_results):
     """Анализирует общую тональность"""
     if not sentiment_results:
@@ -398,7 +384,20 @@ def format_entities_by_type(entities):
 
 def get_transcription_features(transcription_method):
     """Возвращает список доступных функций в зависимости от метода"""
-    if transcription_method == "auto_detection_full_features":
+    if transcription_method == "auto_detection_summary":
+        return [
+            "🎙️ Лучшая модель транскрипции",
+            "🌍 Автообнаружение языка",
+            "👥 Определение спикеров", 
+            "💡 Ключевые моменты",
+            "🎭 Анализ тональности",
+            "🏷️ Определение сущностей",
+            "🤖 Встроенное резюме",
+            "🧠 Умное резюме Claude",
+            "🛡️ Модерация контента",
+            "📊 Категоризация тем"
+        ]
+    elif transcription_method == "auto_detection_chapters":
         return [
             "🎙️ Лучшая модель транскрипции",
             "🌍 Автообнаружение языка",
@@ -407,7 +406,6 @@ def get_transcription_features(transcription_method):
             "💡 Ключевые моменты",
             "🎭 Анализ тональности",
             "🏷️ Определение сущностей",
-            "🤖 Встроенное резюме",
             "🧠 Умное резюме Claude",
             "🛡️ Модерация контента",
             "📊 Категоризация тем"
@@ -421,6 +419,21 @@ def get_transcription_features(transcription_method):
             "🧠 Умное резюме Claude"
         ]
 
+# === Обработчик сигналов ===
+def signal_handler(signum, frame):
+    logger.info("🛑 Получен сигнал завершения, очищаем ресурсы...")
+    # Очистка временных файлов
+    import shutil
+    try:
+        if os.path.exists(TEMP_DIR):
+            shutil.rmtree(TEMP_DIR)
+    except:
+        pass
+    sys.exit(0)
+
+signal.signal(signal.SIGTERM, signal_handler)
+signal.signal(signal.SIGINT, signal_handler)
+
 # === Маршруты ===
 
 @app.route("/")
@@ -431,15 +444,21 @@ def index():
 def health():
     return jsonify({
         "status": "ok",
-        "service": "AssemblyAI Hybrid Approach",
+        "service": "AssemblyAI Hybrid Approach (Fixed)",
         "api_configured": bool(ASSEMBLYAI_API_KEY),
         "openrouter_configured": bool(OPENROUTER_API_KEY),
-        "transcription_methods": [
-            "1. Auto-detection (full features)",
-            "2. Russian language (fallback)"
+        "transcription_strategies": [
+            "1. Auto-detection with summary",
+            "2. Auto-detection with chapters", 
+            "3. Russian language (fallback)"
         ],
-        "auto_features": get_transcription_features("auto_detection_full_features"),
-        "russian_features": get_transcription_features("russian_limited_features"),
+        "fixes_applied": [
+            "✅ Убран конфликт auto_chapters + summarization",
+            "✅ Добавлена множественная стратегия fallback",
+            "✅ Улучшена обработка ошибок",
+            "✅ Добавлены таймауты",
+            "✅ Оптимизирован размер контекста"
+        ],
         "limits": {
             "free_credits": "$50 (185 hours)",
             "max_file_size": "500MB",
@@ -473,7 +492,7 @@ def transcribe():
         estimated_duration = file_size / 1024 / 1024  # грубая оценка в минутах
         logger.info(f"📊 Примерная длительность: ~{estimated_duration:.1f} минут")
         
-        # Гибридная транскрипция с fallback
+        # Улучшенная гибридная транскрипция с множественным fallback
         transcript, transcription_method = transcribe_with_fallback(input_path)
         
         if not transcript.text:
@@ -486,9 +505,13 @@ def transcribe():
         actual_duration = audio_duration_ms / 1000 / 60 if audio_duration_ms else estimated_duration
         detected_language = getattr(transcript, 'language_code', 'unknown')
         
-        # Создаем умное резюме
-        logger.info("🧠 Генерирую умное резюме...")
-        summary = summarizer.create_smart_summary(transcript, transcription_method)
+        # Создаем умное резюме с обработкой ошибок
+        try:
+            logger.info("🧠 Генерирую умное резюме...")
+            summary = summarizer.create_smart_summary(transcript, transcription_method)
+        except Exception as e:
+            logger.warning(f"⚠️ Ошибка генерации умного резюме: {e}")
+            summary = summarizer._create_basic_summary(transcript, transcription_method)
         
         # Анализируем результаты в зависимости от метода
         sentiment_analysis = getattr(transcript, 'sentiment_analysis_results', None) or []
@@ -510,7 +533,7 @@ def transcribe():
         response_data = {
             "transcript": transcript.text,
             "summary": summary,
-            "service_used": "AssemblyAI Hybrid Approach",
+            "service_used": "AssemblyAI Hybrid Approach (Fixed)",
             "transcription_method": transcription_method,
             "detected_language": detected_language,
             
@@ -550,7 +573,7 @@ def transcribe():
                     "end_time": f"{getattr(ch, 'end', 0)/1000/60:.1f}min",
                     "summary": getattr(ch, 'summary', '')
                 }
-                for ch in chapters[:15]
+                for ch in chapters[:12]
             ]
         
         if highlights and hasattr(highlights, 'results'):
@@ -560,14 +583,14 @@ def transcribe():
                     "rank": getattr(h, 'rank', 0),
                     "start_time": f"{getattr(h, 'start', 0)/1000/60:.1f}min"
                 }
-                for h in highlights.results[:20]
+                for h in highlights.results[:15]
             ]
         
         if entities_by_type:
             # Ограничиваем количество сущностей каждого типа
             limited_entities = {}
             for entity_type, entity_list in entities_by_type.items():
-                limited_entities[entity_type] = entity_list[:10]
+                limited_entities[entity_type] = entity_list[:8]
             response_data["entities_by_type"] = limited_entities
         
         # Встроенное резюме от AssemblyAI (если доступно)
@@ -576,31 +599,17 @@ def transcribe():
             response_data["assemblyai_summary"] = builtin_summary
         
         # Информация о методе транскрипции
-        if transcription_method == "auto_detection_full_features":
-            response_data["method_info"] = {
-                "name": "Автообнаружение языка",
-                "features": "Все AI функции доступны",
-                "language_detected": detected_language,
-                "fallback_used": False
-            }
-        else:
-            response_data["method_info"] = {
-                "name": "Русский язык (fallback)",
-                "features": "Ограниченный набор функций",
-                "language_forced": "ru",
-                "fallback_used": True
-            }
+        method_names = {
+            "auto_detection_summary": "Автообнаружение языка с резюме",
+            "auto_detection_chapters": "Автообнаружение языка с главами", 
+            "russian_limited_features": "Русский язык (fallback)"
+        }
+        
+        response_data["method_info"] = {
+            "name": method_names.get(transcription_method, transcription_method),
+            "features": "Все AI функции" if "auto_detection" in transcription_method else "Ограниченный набор",
+            "language_detected": detected_language,
+            "fallback_used": transcription_method == "russian_limited_features"
+        }
 
         return jsonify(response_data)
-        
-    except Exception as e:
-        logger.error(f"❌ Ошибка обработки: {e}")
-        return jsonify({"error": f"Ошибка: {str(e)[:300]}"}), 500
-    finally:
-        if input_path and os.path.exists(input_path):
-            os.remove(input_path)
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    logger.info(f"✅ AssemblyAI Hybrid сервер запущен на порту: {port}")
-    app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
