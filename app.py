@@ -624,3 +624,15 @@ def transcribe():
         }
 
         return jsonify(response_data), 200, {'Content-Type': 'application/json; charset=utf-8'}
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка обработки: {e}")
+        return jsonify({"error": f"Ошибка: {str(e)[:300]}"}), 500
+    finally:
+        if input_path and os.path.exists(input_path):
+            os.remove(input_path)
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    logger.info(f"✅ AssemblyAI Hybrid сервер запущен на порту: {port}")
+    app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
