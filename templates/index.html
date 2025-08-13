@@ -856,4 +856,33 @@
             document.getElementById('transcript').textContent = data.transcript || 'Транскрипция недоступна';
 
             results.style.display = 'block';
-            results.scroll
+            results.scrollIntoView({ behavior: 'smooth' });
+        }
+
+        function showError(message) {
+            error.textContent = message;
+            error.style.display = 'block';
+            error.scrollIntoView({ behavior: 'smooth' });
+        }
+
+        function hideError() {
+            error.style.display = 'none';
+        }
+
+        function hideResults() {
+            results.style.display = 'none';
+        }
+
+        // Проверка поддержки медиа API
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            document.getElementById('micMethod').innerHTML = `
+                <div class="method-title">🎤 Записать с микрофона</div>
+                <div class="method-description" style="color: #dc3545;">
+                    ❌ Ваш браузер не поддерживает запись с микрофона.<br>
+                    Используйте Chrome, Firefox или Safari для записи.
+                </div>
+            `;
+        }
+    </script>
+</body>
+</html>
