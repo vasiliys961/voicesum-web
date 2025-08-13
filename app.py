@@ -1,4 +1,4 @@
-# app.py - Исправленная версия с гибридным подходом AssemblyAI
+from flask import Flask, render_template, request, jsonify, Response# app.py - Исправленная версия с гибридным подходом AssemblyAI
 from flask import Flask, render_template, request, jsonify
 import os
 import tempfile
