@@ -564,28 +564,69 @@
 
         async function startRecording() {
             try {
+                // Проверяем поддержку
+                if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                    throw new Error('Ваш браузер не поддерживает запись с микрофона');
+                }
+
+                // Запрашиваем разрешения с расширенными параметрами
+                console.log('Запрашиваем доступ к микрофону...');
+                
                 const stream = await navigator.mediaDevices.getUserMedia({ 
                     audio: {
                         echoCancellation: true,
                         noiseSuppression: true,
-                        sampleRate: 44100
+                        autoGainControl: true,
+                        sampleRate: 44100,
+                        channelCount: 1
                     } 
                 });
                 
-                mediaRecorder = new MediaRecorder(stream, {
-                    mimeType: 'audio/webm;codecs=opus'
-                });
+                console.log('Доступ к микрофону получен');
+                
+                // Проверяем поддержку MediaRecorder
+                if (!window.MediaRecorder) {
+                    throw new Error('MediaRecorder не поддерживается в вашем браузере');
+                }
+
+                // Определяем поддерживаемый формат
+                let mimeType = 'audio/webm;codecs=opus';
+                if (!MediaRecorder.isTypeSupported(mimeType)) {
+                    mimeType = 'audio/webm';
+                    if (!MediaRecorder.isTypeSupported(mimeType)) {
+                        mimeType = 'audio/ogg;codecs=opus';
+                        if (!MediaRecorder.isTypeSupported(mimeType)) {
+                            mimeType = 'audio/mp4';
+                            if (!MediaRecorder.isTypeSupported(mimeType)) {
+                                mimeType = ''; // Используем по умолчанию
+                            }
+                        }
+                    }
+                }
+
+                console.log('Используемый MIME тип:', mimeType || 'default');
+                
+                mediaRecorder = new MediaRecorder(stream, mimeType ? {
+                    mimeType: mimeType
+                } : {});
                 
                 audioChunks = [];
                 
                 mediaRecorder.ondataavailable = function(event) {
+                    console.log('Получены данные:', event.data.size, 'байт');
                     if (event.data.size > 0) {
                         audioChunks.push(event.data);
                     }
                 };
                 
                 mediaRecorder.onstop = function() {
-                    const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                    console.log('Запись остановлена, обрабатываем данные...');
+                    const audioBlob = new Blob(audioChunks, { 
+                        type: mimeType || 'audio/webm' 
+                    });
+                    
+                    console.log('Создан blob размером:', audioBlob.size, 'байт');
+                    
                     currentAudioBlob = audioBlob;
                     currentFile = null;
                     
@@ -596,19 +637,51 @@
                     showRecordedFileInfo(audioBlob);
                     
                     // Останавливаем все треки
-                    stream.getTracks().forEach(track => track.stop());
+                    stream.getTracks().forEach(track => {
+                        track.stop();
+                        console.log('Трек остановлен:', track.kind);
+                    });
+                };
+
+                mediaRecorder.onerror = function(event) {
+                    console.error('Ошибка MediaRecorder:', event);
+                    showError('Ошибка при записи: ' + (event.error ? event.error.message : 'неизвестная ошибка'));
                 };
                 
-                mediaRecorder.start();
+                mediaRecorder.start(1000); // Сохраняем данные каждую секунду
                 isRecording = true;
                 recordingStartTime = Date.now();
                 
+                console.log('Запись началась');
                 updateRecordingUI();
                 startTimer();
                 
             } catch (error) {
                 console.error('Error accessing microphone:', error);
-                showError('Не удалось получить доступ к микрофону. Убедитесь, что разрешили доступ.');
+                
+                let errorMessage = 'Не удалось получить доступ к микрофону.';
+                
+                if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
+                    errorMessage = 'Доступ к микрофону запрещен. Проверьте настройки браузера:\n\n1. Нажмите на иконку замка/камеры в адресной строке\n2. Разрешите доступ к микрофону\n3. Обновите страницу и попробуйте снова';
+                } else if (error.name === 'NotFoundError' || error.name === 'DevicesNotFoundError') {
+                    errorMessage = 'Микрофон не найден. Убедитесь, что микрофон подключен и работает.';
+                } else if (error.name === 'NotReadableError' || error.name === 'TrackStartError') {
+                    errorMessage = 'Микрофон используется другим приложением. Закройте другие программы, использующие микрофон.';
+                } else if (error.name === 'OverconstrainedError' || error.name === 'ConstraintNotSatisfiedError') {
+                    errorMessage = 'Настройки микрофона не поддерживаются. Попробуйте другой микрофон.';
+                } else if (error.name === 'NotSupportedError') {
+                    errorMessage = 'Запись не поддерживается в вашем браузере. Используйте Chrome, Firefox или Safari.';
+                } else if (error.name === 'SecurityError') {
+                    errorMessage = 'Ошибка безопасности. Убедитесь, что сайт загружен по HTTPS.';
+                } else {
+                    errorMessage += '\n\nДетали: ' + error.message;
+                }
+                
+                showError(errorMessage);
+                
+                // Сбрасываем UI
+                isRecording = false;
+                updateRecordingUI();
             }
         }
 
@@ -873,15 +946,43 @@
             results.style.display = 'none';
         }
 
-        // Проверка поддержки медиа API
-        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-            document.getElementById('micMethod').innerHTML = `
-                <div class="method-title">🎤 Записать с микрофона</div>
-                <div class="method-description" style="color: #dc3545;">
-                    ❌ Ваш браузер не поддерживает запись с микрофона.<br>
-                    Используйте Chrome, Firefox или Safari для записи.
-                </div>
-            `;
+        // Проверка поддержки медиа API при загрузке страницы
+        window.addEventListener('DOMContentLoaded', function() {
+            checkMicrophoneSupport();
+        });
+
+        async function checkMicrophoneSupport() {
+            const micMethod = document.getElementById('micMethod');
+            
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                micMethod.innerHTML = `
+                    <div class="method-title">🎤 Записать с микрофона</div>
+                    <div class="method-description" style="color: #dc3545;">
+                        ❌ Ваш браузер не поддерживает запись с микрофона.<br>
+                        Используйте Chrome, Firefox или Safari для записи.
+                    </div>
+                `;
+                return;
+            }
+
+            // Проверяем доступность устройств
+            try {
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                const hasAudioInput = devices.some(device => device.kind === 'audioinput');
+                
+                if (!hasAudioInput) {
+                    micMethod.innerHTML = `
+                        <div class="method-title">🎤 Записать с микрофона</div>
+                        <div class="method-description" style="color: #ffc107;">
+                            ⚠️ Микрофон не обнаружен.<br>
+                            Подключите микрофон и обновите страницу.
+                        </div>
+                    `;
+                }
+            } catch (error) {
+                console.log('Не удалось проверить устройства:', error);
+                // Не показываем ошибку, так как это может быть из-за отсутствия разрешений
+            }
         }
     </script>
 </body>
