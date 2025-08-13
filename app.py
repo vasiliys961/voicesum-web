@@ -484,25 +484,52 @@ def transcribe():
         if file.filename == '':
             return jsonify({"error": "Файл не выбран"}), 400
 
+        # Проверка размера файла
+        file_size = len(file.read())
+        file.seek(0)  # Возвращаем указатель в начало
+        
+        if file_size > 100 * 1024 * 1024:  # 100MB
+            return jsonify({"error": "Файл слишком большой. Максимальный размер: 100MB"}), 413
+
         timestamp = int(time.time() * 1000)
         input_path = os.path.join(TEMP_DIR, f"hybrid_{timestamp}.{file.filename.split('.')[-1]}")
         
         # Сохранение файла
         file.save(input_path)
-        file_size = os.path.getsize(input_path)
         logger.info(f"📥 Файл сохранён: {file_size / 1024 / 1024:.1f} MB")
         
         # Примерная оценка длительности
         estimated_duration = file_size / 1024 / 1024  # грубая оценка в минутах
         logger.info(f"📊 Примерная длительность: ~{estimated_duration:.1f} минут")
         
-        # Улучшенная гибридная транскрипция с множественным fallback
-        transcript, transcription_method = transcribe_with_fallback(input_path)
+        # Предупреждение для больших файлов
+        if estimated_duration > 20:
+            logger.warning(f"⚠️ Большой файл ({estimated_duration:.1f} мин), может потребовать много времени")
         
-        if not transcript.text:
-            return jsonify({"error": "Не удалось получить транскрипцию"}), 400
+        # Установка расширенного таймаута для больших файлов
+        import signal
         
-        logger.info(f"✅ Транскрипция завершена методом: {transcription_method}")
+        def timeout_handler(signum, frame):
+            raise TimeoutError("Превышено время обработки файла")
+        
+        # Динамический таймаут: 5 минут + 30 секунд за каждую минуту аудио
+        timeout_seconds = min(600, 300 + int(estimated_duration * 30))
+        logger.info(f"⏱️ Установлен таймаут: {timeout_seconds} секунд")
+        
+        signal.signal(signal.SIGALRM, timeout_handler)
+        signal.alarm(timeout_seconds)
+        
+        try:
+            # Улучшенная гибридная транскрипция с множественным fallback
+            transcript, transcription_method = transcribe_with_fallback(input_path)
+            
+            if not transcript.text:
+                return jsonify({"error": "Не удалось получить транскрипцию"}), 400
+            
+            logger.info(f"✅ Транскрипция завершена методом: {transcription_method}")
+            
+        finally:
+            signal.alarm(0)  # Отменяем таймаут
         
         # Получаем точную длительность из результата AssemblyAI
         audio_duration_ms = getattr(transcript, 'audio_duration', None)
