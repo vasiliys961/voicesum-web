@@ -5,351 +5,53 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>VoiceSum - Русская транскрипция</title>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-        
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            padding: 20px;
-        }
-        
-        .container {
-            max-width: 900px;
-            margin: 0 auto;
-            background: white;
-            border-radius: 20px;
-            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
-            overflow: hidden;
-        }
-        
-        .header {
-            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
-            color: white;
-            padding: 30px;
-            text-align: center;
-        }
-        
-        .header h1 {
-            font-size: 2.5rem;
-            margin-bottom: 10px;
-            font-weight: 700;
-        }
-        
-        .header p {
-            font-size: 1.1rem;
-            opacity: 0.9;
-        }
-        
-        .upload-section {
-            padding: 40px;
-            text-align: center;
-        }
-
-        .input-methods {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 30px;
-            margin-bottom: 30px;
-        }
-
-        .input-method {
-            background: #f8f9fa;
-            padding: 30px;
-            border-radius: 15px;
-            border: 2px dashed #dee2e6;
-            transition: all 0.3s ease;
-        }
-
-        .input-method:hover {
-            border-color: #4facfe;
-            background: #f0f8ff;
-        }
-
-        .method-title {
-            font-size: 1.3rem;
-            font-weight: 600;
-            color: #2c3e50;
-            margin-bottom: 15px;
-        }
-
-        .method-description {
-            color: #666;
-            margin-bottom: 20px;
-            font-size: 0.95rem;
-        }
-        
-        .file-input-wrapper {
-            position: relative;
-            display: inline-block;
-        }
-        
-        .file-input {
-            display: none;
-        }
-        
-        .file-input-label {
-            display: inline-block;
-            padding: 12px 25px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            border-radius: 25px;
-            cursor: pointer;
-            font-size: 1rem;
-            font-weight: 600;
-            transition: all 0.3s ease;
-            border: none;
-        }
-        
-        .file-input-label:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 8px 15px rgba(102, 126, 234, 0.3);
-        }
-
-        .mic-button {
-            width: 80px;
-            height: 80px;
-            border-radius: 50%;
-            border: none;
-            background: linear-gradient(135deg, #ff6b6b 0%, #ee5a52 100%);
-            color: white;
-            font-size: 2rem;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            margin: 0 auto 15px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
-
-        .mic-button:hover {
-            transform: scale(1.05);
-            box-shadow: 0 10px 20px rgba(255, 107, 107, 0.3);
-        }
-
-        .mic-button.recording {
-            background: linear-gradient(135deg, #ee5a52 0%, #ff6b6b 100%);
-            animation: pulse 1.5s infinite;
-        }
-
-        @keyframes pulse {
-            0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(255, 107, 107, 0.7); }
-            70% { transform: scale(1.05); box-shadow: 0 0 0 20px rgba(255, 107, 107, 0); }
-            100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(255, 107, 107, 0); }
-        }
-
-        .recording-info {
-            display: none;
-            background: #fff3cd;
-            padding: 15px;
-            border-radius: 10px;
-            border-left: 4px solid #ffc107;
-            margin: 15px 0;
-            color: #856404;
-        }
-
-        .recording-info.show {
-            display: block;
-        }
-
-        .recording-timer {
-            font-size: 1.2rem;
-            font-weight: 600;
-            color: #ff6b6b;
-            margin-bottom: 10px;
-        }
-
-        .recorded-audio {
-            display: none;
-            margin: 20px 0;
-            text-align: center;
-        }
-
-        .recorded-audio.show {
-            display: block;
-        }
-
-        .recorded-audio audio {
-            width: 100%;
-            max-width: 400px;
-            margin-bottom: 15px;
-        }
-
-        .upload-btn {
-            display: none;
-            background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
-            color: white;
-            border: none;
-            padding: 15px 40px;
-            border-radius: 50px;
-            font-size: 1.1rem;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            margin-top: 20px;
-        }
-        
-        .upload-btn:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 10px 20px rgba(17, 153, 142, 0.3);
-        }
-        
-        .upload-btn:disabled {
-            background: #ccc;
-            cursor: not-allowed;
-            transform: none;
-            box-shadow: none;
-        }
-
-        .upload-btn.show {
-            display: inline-block;
-        }
-        
-        .progress {
-            margin: 30px 0;
-            display: none;
-        }
-        
-        .progress-bar {
-            width: 100%;
-            height: 8px;
-            background: #f0f0f0;
-            border-radius: 4px;
-            overflow: hidden;
-        }
-        
-        .progress-fill {
-            height: 100%;
-            background: linear-gradient(90deg, #4facfe 0%, #00f2fe 100%);
-            width: 0%;
-            transition: width 0.3s ease;
-            animation: shimmer 2s infinite;
-        }
-        
-        @keyframes shimmer {
-            0% { opacity: 0.6; }
-            50% { opacity: 1; }
-            100% { opacity: 0.6; }
-        }
-        
-        .results {
-            padding: 40px;
-            background: #f8f9fa;
-            display: none;
-        }
-        
-        .result-section {
-            margin-bottom: 30px;
-            background: white;
-            padding: 25px;
-            border-radius: 15px;
-            box-shadow: 0 5px 15px rgba(0,0,0,0.05);
-        }
-        
-        .result-section h3 {
-            color: #2c3e50;
-            margin-bottom: 15px;
-            font-size: 1.3rem;
-        }
-        
-        .transcript {
-            line-height: 1.6;
-            color: #444;
-            max-height: 300px;
-            overflow-y: auto;
-            background: #f8f9fa;
-            padding: 20px;
-            border-radius: 10px;
-            border-left: 4px solid #4facfe;
-        }
-        
-        .error {
-            background: #ffe6e6;
-            color: #d8000c;
-            padding: 20px;
-            border-radius: 10px;
-            border-left: 4px solid #d8000c;
-            margin: 20px 0;
-            display: none;
-        }
-        
-        .file-info {
-            background: #e3f2fd;
-            padding: 15px;
-            border-radius: 10px;
-            margin: 20px 0;
-            display: none;
-        }
-        
-        .stats {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-            gap: 15px;
-            margin-top: 20px;
-        }
-        
-        .stat-item {
-            background: #f8f9fa;
-            padding: 15px;
-            border-radius: 10px;
-            text-align: center;
-        }
-        
-        .stat-value {
-            font-size: 1.3rem;
-            font-weight: 700;
-            color: #4facfe;
-        }
-        
-        .stat-label {
-            color: #666;
-            font-size: 0.85rem;
-        }
-
-        .processing-status {
-            text-align: center;
-            padding: 20px;
-            display: none;
-        }
-
-        .spinner {
-            border: 4px solid #f3f3f3;
-            border-top: 4px solid #4facfe;
-            border-radius: 50%;
-            width: 40px;
-            height: 40px;
-            animation: spin 1s linear infinite;
-            margin: 0 auto 15px;
-        }
-
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-
-        @media (max-width: 768px) {
-            .input-methods {
-                grid-template-columns: 1fr;
-                gap: 20px;
-            }
-            
-            .container {
-                margin: 10px;
-                border-radius: 15px;
-            }
-            
-            .header h1 {
-                font-size: 2rem;
-            }
-            
-            .upload-section {
-                padding: 20px;
-            }
-        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; padding: 20px; }
+        .container { max-width: 900px; margin: 0 auto; background: white; border-radius: 20px; box-shadow: 0 20px 40px rgba(0,0,0,0.1); overflow: hidden; }
+        .header { background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%); color: white; padding: 30px; text-align: center; }
+        .header h1 { font-size: 2.5rem; margin-bottom: 10px; font-weight: 700; }
+        .header p { font-size: 1.1rem; opacity: 0.9; }
+        .upload-section { padding: 40px; text-align: center; }
+        .input-methods { display: grid; grid-template-columns: 1fr 1fr; gap: 30px; margin-bottom: 30px; }
+        .input-method { background: #f8f9fa; padding: 30px; border-radius: 15px; border: 2px dashed #dee2e6; transition: all 0.3s ease; }
+        .input-method:hover { border-color: #4facfe; background: #f0f8ff; }
+        .method-title { font-size: 1.3rem; font-weight: 600; color: #2c3e50; margin-bottom: 15px; }
+        .method-description { color: #666; margin-bottom: 20px; font-size: 0.95rem; }
+        .file-input { display: none; }
+        .file-input-label { display: inline-block; padding: 12px 25px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border-radius: 25px; cursor: pointer; font-size: 1rem; font-weight: 600; transition: all 0.3s ease; border: none; }
+        .file-input-label:hover { transform: translateY(-2px); box-shadow: 0 8px 15px rgba(102, 126, 234, 0.3); }
+        .mic-button { width: 80px; height: 80px; border-radius: 50%; border: none; background: linear-gradient(135deg, #ff6b6b 0%, #ee5a52 100%); color: white; font-size: 2rem; cursor: pointer; transition: all 0.3s ease; margin: 0 auto 15px; display: flex; align-items: center; justify-content: center; }
+        .mic-button:hover { transform: scale(1.05); box-shadow: 0 10px 20px rgba(255, 107, 107, 0.3); }
+        .mic-button.recording { background: linear-gradient(135deg, #ee5a52 0%, #ff6b6b 100%); animation: pulse 1.5s infinite; }
+        @keyframes pulse { 0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(255, 107, 107, 0.7); } 70% { transform: scale(1.05); box-shadow: 0 0 0 20px rgba(255, 107, 107, 0); } 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(255, 107, 107, 0); } }
+        .recording-info { display: none; background: #fff3cd; padding: 15px; border-radius: 10px; border-left: 4px solid #ffc107; margin: 15px 0; color: #856404; }
+        .recording-info.show { display: block; }
+        .recording-timer { font-size: 1.2rem; font-weight: 600; color: #ff6b6b; margin-bottom: 10px; }
+        .recorded-audio { display: none; margin: 20px 0; text-align: center; }
+        .recorded-audio.show { display: block; }
+        .recorded-audio audio { width: 100%; max-width: 400px; margin-bottom: 15px; }
+        .upload-btn { display: none; background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%); color: white; border: none; padding: 15px 40px; border-radius: 50px; font-size: 1.1rem; font-weight: 600; cursor: pointer; transition: all 0.3s ease; margin-top: 20px; }
+        .upload-btn:hover { transform: translateY(-2px); box-shadow: 0 10px 20px rgba(17, 153, 142, 0.3); }
+        .upload-btn:disabled { background: #ccc; cursor: not-allowed; transform: none; box-shadow: none; }
+        .upload-btn.show { display: inline-block; }
+        .progress { margin: 30px 0; display: none; }
+        .progress-bar { width: 100%; height: 8px; background: #f0f0f0; border-radius: 4px; overflow: hidden; }
+        .progress-fill { height: 100%; background: linear-gradient(90deg, #4facfe 0%, #00f2fe 100%); width: 0%; transition: width 0.3s ease; animation: shimmer 2s infinite; }
+        @keyframes shimmer { 0% { opacity: 0.6; } 50% { opacity: 1; } 100% { opacity: 0.6; } }
+        .results { padding: 40px; background: #f8f9fa; display: none; }
+        .result-section { margin-bottom: 30px; background: white; padding: 25px; border-radius: 15px; box-shadow: 0 5px 15px rgba(0,0,0,0.05); }
+        .result-section h3 { color: #2c3e50; margin-bottom: 15px; font-size: 1.3rem; }
+        .transcript { line-height: 1.6; color: #444; max-height: 300px; overflow-y: auto; background: #f8f9fa; padding: 20px; border-radius: 10px; border-left: 4px solid #4facfe; }
+        .error { background: #ffe6e6; color: #d8000c; padding: 20px; border-radius: 10px; border-left: 4px solid #d8000c; margin: 20px 0; display: none; }
+        .file-info { background: #e3f2fd; padding: 15px; border-radius: 10px; margin: 20px 0; display: none; }
+        .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 15px; margin-top: 20px; }
+        .stat-item { background: #f8f9fa; padding: 15px; border-radius: 10px; text-align: center; }
+        .stat-value { font-size: 1.3rem; font-weight: 700; color: #4facfe; }
+        .stat-label { color: #666; font-size: 0.85rem; }
+        .processing-status { text-align: center; padding: 20px; display: none; }
+        .spinner { border: 4px solid #f3f3f3; border-top: 4px solid #4facfe; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin: 0 auto 15px; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        @media (max-width: 768px) { .input-methods { grid-template-columns: 1fr; gap: 20px; } .container { margin: 10px; border-radius: 15px; } .header h1 { font-size: 2rem; } .upload-section { padding: 20px; } }
     </style>
 </head>
 <body>
@@ -361,33 +63,25 @@
         
         <div class="upload-section">
             <div class="input-methods">
-                <!-- Загрузка файла -->
-                <div class="input-method" id="fileMethod">
+                <div class="input-method">
                     <div class="method-title">📁 Загрузить файл</div>
                     <div class="method-description">Выберите аудио или видео файл (до 200MB)</div>
-                    
                     <div class="file-input-wrapper">
                         <input type="file" id="audioFile" class="file-input" accept="audio/*,video/*">
-                        <label for="audioFile" class="file-input-label">
-                            📂 Выбрать файл
-                        </label>
+                        <label for="audioFile" class="file-input-label">📂 Выбрать файл</label>
                     </div>
                 </div>
 
-                <!-- Запись с микрофона -->
-                <div class="input-method" id="micMethod">
+                <div class="input-method">
                     <div class="method-title">🎤 Записать с микрофона</div>
                     <div class="method-description">Запишите аудио прямо в браузере (до 30 минут)</div>
-                    
                     <div class="microphone-section">
                         <button class="mic-button" id="micButton">🎤</button>
                         <div id="micStatus">Нажмите для записи</div>
-                        
                         <div class="recording-info" id="recordingInfo">
                             <div class="recording-timer" id="recordingTimer">00:00</div>
                             <div>📢 Идет запись... Нажмите еще раз для остановки</div>
                         </div>
-
                         <div class="recorded-audio" id="recordedAudio">
                             <audio controls id="audioPlayer"></audio>
                             <div>✅ Запись завершена! Можете прослушать и отправить на обработку</div>
@@ -397,7 +91,6 @@
             </div>
             
             <div class="file-info" id="fileInfo"></div>
-            
             <button class="upload-btn" id="uploadBtn">🚀 Начать обработку</button>
             
             <div class="progress" id="progress">
@@ -418,12 +111,10 @@
                 <h3>📊 Статистика обработки</h3>
                 <div class="stats" id="stats"></div>
             </div>
-            
             <div class="result-section">
                 <h3>🧠 Умное резюме</h3>
                 <div id="summary"></div>
             </div>
-            
             <div class="result-section">
                 <h3>📝 Полная транскрипция</h3>
                 <div class="transcript" id="transcript"></div>
@@ -432,7 +123,6 @@
     </div>
 
     <script>
-        // Глобальные переменные
         const fileInput = document.getElementById('audioFile');
         const uploadBtn = document.getElementById('uploadBtn');
         const fileInfo = document.getElementById('fileInfo');
@@ -442,8 +132,6 @@
         const statusText = document.getElementById('statusText');
         const results = document.getElementById('results');
         const error = document.getElementById('error');
-
-        // Переменные для микрофона
         const micButton = document.getElementById('micButton');
         const micStatus = document.getElementById('micStatus');
         const recordingInfo = document.getElementById('recordingInfo');
@@ -459,7 +147,6 @@
         let currentAudioBlob = null;
         let currentFile = null;
 
-        // Обработка выбора файла
         fileInput.addEventListener('change', function(e) {
             const file = e.target.files[0];
             if (file) {
@@ -470,10 +157,7 @@
             }
         });
 
-        // Обработка клика на кнопку обработки
         uploadBtn.addEventListener('click', uploadFile);
-
-        // Обработка записи с микрофона
         micButton.addEventListener('click', toggleRecording);
 
         function showFileInfo(file) {
@@ -481,7 +165,6 @@
             const estimatedMinutes = (sizeMB * 2).toFixed(1);
             
             let modeInfo = '';
-            
             if (sizeMB < 10) {
                 modeInfo = '<br><strong style="color: #28a745;">⚡ Режим: Быстрая обработка (до 5 минут)</strong>';
             } else if (sizeMB < 30) {
@@ -494,12 +177,7 @@
                 modeInfo = '<br><strong style="color: #dc3545;">🐢 Режим: Ультра-медленная обработка (до 30 минут)</strong>';
             }
             
-            fileInfo.innerHTML = `
-                <strong>📄 Файл:</strong> ${file.name}<br>
-                <strong>📏 Размер:</strong> ${sizeMB} MB<br>
-                <strong>⏱️ Примерное время:</strong> ~${estimatedMinutes} минут<br>
-                <strong>🔧 Метод:</strong> Умная обработка больших файлов${modeInfo}
-            `;
+            fileInfo.innerHTML = `<strong>📄 Файл:</strong> ${file.name}<br><strong>📏 Размер:</strong> ${sizeMB} MB<br><strong>⏱️ Примерное время:</strong> ~${estimatedMinutes} минут<br><strong>🔧 Метод:</strong> Умная обработка больших файлов${modeInfo}`;
             fileInfo.style.display = 'block';
             uploadBtn.classList.add('show');
             hideError();
@@ -521,12 +199,7 @@
                 }
 
                 const stream = await navigator.mediaDevices.getUserMedia({ 
-                    audio: {
-                        echoCancellation: true,
-                        noiseSuppression: true,
-                        autoGainControl: true,
-                        sampleRate: 44100
-                    } 
+                    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, sampleRate: 44100 } 
                 });
                 
                 if (!window.MediaRecorder) {
@@ -551,19 +224,13 @@
                 };
                 
                 mediaRecorder.onstop = function() {
-                    const audioBlob = new Blob(audioChunks, { 
-                        type: mimeType || 'audio/webm' 
-                    });
-                    
+                    const audioBlob = new Blob(audioChunks, { type: mimeType || 'audio/webm' });
                     currentAudioBlob = audioBlob;
                     currentFile = null;
-                    
                     const audioUrl = URL.createObjectURL(audioBlob);
                     audioPlayer.src = audioUrl;
-                    
                     recordedAudio.classList.add('show');
                     showRecordedFileInfo(audioBlob);
-                    
                     stream.getTracks().forEach(track => track.stop());
                 };
 
@@ -575,15 +242,12 @@
                 mediaRecorder.start(1000);
                 isRecording = true;
                 recordingStartTime = Date.now();
-                
                 updateRecordingUI();
                 startTimer();
                 
             } catch (error) {
                 console.error('Ошибка доступа к микрофону:', error);
-                
                 let errorMessage = 'Не удалось получить доступ к микрофону.';
-                
                 if (error.name === 'NotAllowedError') {
                     errorMessage = 'Доступ к микрофону запрещен. Разрешите доступ в настройках браузера.';
                 } else if (error.name === 'NotFoundError') {
@@ -591,7 +255,6 @@
                 } else if (error.name === 'NotReadableError') {
                     errorMessage = 'Микрофон используется другим приложением.';
                 }
-                
                 showError(errorMessage);
                 isRecording = false;
                 updateRecordingUI();
@@ -640,7 +303,6 @@
                     const minutes = Math.floor(elapsed / 60000);
                     const seconds = Math.floor((elapsed % 60000) / 1000);
                     recordingTimer.textContent = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
-                    
                     if (minutes >= 30) {
                         stopRecording();
                         showError('Запись остановлена автоматически (максимум 30 минут)');
@@ -659,14 +321,7 @@
         function showRecordedFileInfo(blob) {
             const sizeMB = (blob.size / 1024 / 1024).toFixed(1);
             const estimatedMinutes = (blob.size / (1024 * 1024 * 0.5)).toFixed(1);
-            
-            fileInfo.innerHTML = `
-                <strong>📄 Тип:</strong> Запись с микрофона<br>
-                <strong>📏 Размер:</strong> ${sizeMB} MB<br>
-                <strong>⏱️ Примерное время:</strong> ~${estimatedMinutes} минут<br>
-                <strong>🔧 Метод:</strong> Обработка записи микрофона<br>
-                <strong>🎵 Формат:</strong> WebM
-            `;
+            fileInfo.innerHTML = `<strong>📄 Тип:</strong> Запись с микрофона<br><strong>📏 Размер:</strong> ${sizeMB} MB<br><strong>⏱️ Примерное время:</strong> ~${estimatedMinutes} минут<br><strong>🔧 Метод:</strong> Обработка записи микрофона<br><strong>🎵 Формат:</strong> WebM`;
             fileInfo.style.display = 'block';
             uploadBtn.classList.add('show');
             hideError();
@@ -675,16 +330,10 @@
 
         async function uploadFile() {
             let fileToUpload;
-            let fileName;
-
             if (currentFile) {
                 fileToUpload = currentFile;
-                fileName = currentFile.name;
             } else if (currentAudioBlob) {
-                fileToUpload = new File([currentAudioBlob], `recording_${Date.now()}.webm`, {
-                    type: 'audio/webm'
-                });
-                fileName = fileToUpload.name;
+                fileToUpload = new File([currentAudioBlob], `recording_${Date.now()}.webm`, { type: 'audio/webm' });
             } else {
                 showError('Пожалуйста, выберите файл или сделайте запись');
                 return;
@@ -692,7 +341,6 @@
 
             hideError();
             hideResults();
-            
             progress.style.display = 'block';
             processingStatus.style.display = 'block';
             uploadBtn.disabled = true;
@@ -706,35 +354,15 @@
             }, 2000);
 
             const sizeMB = fileToUpload.size / 1024 / 1024;
-            let statusMessages;
-            let intervalTime;
-            
+            let statusMessages, intervalTime;
             if (sizeMB < 10) {
-                statusMessages = [
-                    'Загружаем файл на сервер...',
-                    'Быстрая транскрипция...',
-                    'Анализируем содержимое...',
-                    'Генерируем резюме...'
-                ];
+                statusMessages = ['Загружаем файл на сервер...', 'Быстрая транскрипция...', 'Анализируем содержимое...', 'Генерируем резюме...'];
                 intervalTime = 5000;
             } else if (sizeMB < 30) {
-                statusMessages = [
-                    'Загружаем файл на сервер...',
-                    'Стандартная обработка...',
-                    'Транскрибируем аудио...',
-                    'Анализируем текст...',
-                    'Генерируем умное резюме...'
-                ];
+                statusMessages = ['Загружаем файл на сервер...', 'Стандартная обработка...', 'Транскрибируем аудио...', 'Анализируем текст...', 'Генерируем умное резюме...'];
                 intervalTime = 8000;
             } else {
-                statusMessages = [
-                    'Загружаем большой файл...',
-                    'Начинаем медленную обработку...',
-                    'Транскрибируем длинное аудио...',
-                    'Это займет время, ожидайте...',
-                    'Анализируем большой объем текста...',
-                    'Генерируем подробное резюме...'
-                ];
+                statusMessages = ['Загружаем большой файл...', 'Начинаем медленную обработку...', 'Транскрибируем длинное аудио...', 'Это займет время, ожидайте...', 'Анализируем большой объем текста...', 'Генерируем подробное резюме...'];
                 intervalTime = 15000;
             }
             
@@ -753,7 +381,7 @@
                 const response = await fetch('/transcribe', {
                     method: 'POST',
                     body: formData,
-                    signal: AbortSignal.timeout(2100000) // 35 минут
+                    signal: AbortSignal.timeout(2100000)
                 });
 
                 clearInterval(progressInterval);
@@ -767,9 +395,7 @@
                         if (errorData.error) {
                             errorMessage = errorData.error;
                         }
-                    } catch (e) {
-                        // Игнорируем ошибки парсинга
-                    }
+                    } catch (e) {}
                     throw new Error(errorMessage);
                 }
 
@@ -787,15 +413,12 @@
                 console.error('Upload error:', error);
                 clearInterval(progressInterval);
                 clearInterval(statusInterval);
-                
                 let userMessage = 'Произошла ошибка при обработке файла.';
-                
                 if (error.name === 'TimeoutError') {
                     userMessage = 'Время ожидания истекло. Попробуйте файл меньшего размера.';
                 } else if (error.message) {
                     userMessage = error.message;
                 }
-                
                 showError(userMessage);
             } finally {
                 uploadBtn.disabled = false;
@@ -810,26 +433,45 @@
             const statistics = data.statistics || {};
             
             stats.innerHTML = `
-                <div class="stat-item">
-                    <div class="stat-value">${statistics.processing_time || 'N/A'}</div>
-                    <div class="stat-label">⏱️ Время обработки</div>
-                </div>
-                <div class="stat-item">
-                    <div class="stat-value">${statistics.audio_duration || 'N/A'}</div>
-                    <div class="stat-label">🎵 Длительность</div>
-                </div>
-                <div class="stat-item">
-                    <div class="stat-value">${statistics.file_size || 'N/A'}</div>
-                    <div class="stat-label">📁 Размер файла</div>
-                </div>
-                <div class="stat-item">
-                    <div class="stat-value">${data.detected_language || 'N/A'}</div>
-                    <div class="stat-label">🌍 Язык</div>
-                </div>
-                <div class="stat-item">
-                    <div class="stat-value">${data.transcription_method || 'N/A'}</div>
-                    <div class="stat-label">🔧 Метод</div>
-                </div>
-                <div class="stat-item">
-                    <div class="stat-value">${statistics.credits_used || 'N/A'}</div>
-                    <div class="stat-label">💰 Ст
+                <div class="stat-item"><div class="stat-value">${statistics.processing_time || 'N/A'}</div><div class="stat-label">⏱️ Время обработки</div></div>
+                <div class="stat-item"><div class="stat-value">${statistics.audio_duration || 'N/A'}</div><div class="stat-label">🎵 Длительность</div></div>
+                <div class="stat-item"><div class="stat-value">${statistics.file_size || 'N/A'}</div><div class="stat-label">📁 Размер файла</div></div>
+                <div class="stat-item"><div class="stat-value">${data.detected_language || 'N/A'}</div><div class="stat-label">🌍 Язык</div></div>
+                <div class="stat-item"><div class="stat-value">${data.transcription_method || 'N/A'}</div><div class="stat-label">🔧 Метод</div></div>
+                <div class="stat-item"><div class="stat-value">${statistics.credits_used || 'N/A'}</div><div class="stat-label">💰 Стоимость</div></div>
+            `;
+
+            if (statistics.transcript_truncated) {
+                stats.innerHTML += '<div class="stat-item" style="grid-column: 1 / -1; background: #fff3cd; border-left: 4px solid #ffc107;"><div style="color: #856404;">⚠️ Транскрипт обрезан для оптимизации отображения</div></div>';
+            }
+
+            document.getElementById('summary').innerHTML = '<pre style="white-space: pre-wrap; font-family: inherit;">' + (data.summary || 'Резюме недоступно') + '</pre>';
+            document.getElementById('transcript').textContent = data.transcript || 'Транскрипция недоступна';
+
+            results.style.display = 'block';
+            results.scrollIntoView({ behavior: 'smooth' });
+        }
+
+        function showError(message) {
+            error.textContent = message;
+            error.style.display = 'block';
+            error.scrollIntoView({ behavior: 'smooth' });
+        }
+
+        function hideError() {
+            error.style.display = 'none';
+        }
+
+        function hideResults() {
+            results.style.display = 'none';
+        }
+
+        // Проверка поддержки микрофона при загрузке
+        window.addEventListener('DOMContentLoaded', function() {
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                document.getElementById('micMethod').innerHTML = '<div class="method-title">🎤 Записать с микрофона</div><div class="method-description" style="color: #dc3545;">❌ Ваш браузер не поддерживает запись с микрофона.<br>Используйте Chrome, Firefox или Safari для записи.</div>';
+            }
+        });
+    </script>
+</body>
+</html>
