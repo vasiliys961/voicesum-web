@@ -1,5 +1,5 @@
 from flask import Flask, render_template, request, jsonify, Response# app.py - Исправленная версия с гибридным подходом AssemblyAI
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, Response, stream_template
 import os
 import tempfile
 import assemblyai as aai
@@ -8,6 +8,9 @@ import time
 import logging
 import signal
 import sys
+import json
+import threading
+import queue
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -115,6 +118,62 @@ def get_transcription_config_russian():
         filter_profanity=False,  # Не фильтруем мат
         redact_pii=False,        # Не скрываем персональные данные
     )
+
+def transcribe_with_fallback(file_path):
+    """Улучшенная транскрипция с приоритетом русского языка"""
+    
+    # Стратегия 1: СНАЧАЛА пробуем русский язык (лучше для русского контента)
+    try:
+        logger.info("🇷🇺 Пробую русский язык (рекомендуется для русского контента)...")
+        config_ru = get_transcription_config_russian()
+        transcriber = aai.Transcriber(config=config_ru)
+        transcript = transcriber.transcribe(file_path)
+        
+        if transcript.status == aai.TranscriptStatus.error:
+            raise RuntimeError(f"Ошибка русского: {transcript.error}")
+        
+        # Проверяем качество транскрипции
+        if transcript.text and len(transcript.text.strip()) > 10:
+            logger.info("✅ Транскрипция на русском успешна!")
+            return transcript, "russian_limited_features"
+        else:
+            raise RuntimeError("Пустая транскрипция")
+        
+    except Exception as e:
+        logger.warning(f"⚠️ Русский язык не сработал: {e}")
+        
+        # Стратегия 2: Автообнаружение с резюме
+        try:
+            logger.info("🌍 Пробую автообнаружение языка с резюме...")
+            config_auto = get_transcription_config_auto()
+            transcriber = aai.Transcriber(config=config_auto)
+            transcript = transcriber.transcribe(file_path)
+            
+            if transcript.status == aai.TranscriptStatus.error:
+                raise RuntimeError(f"Ошибка автообнаружения: {transcript.error}")
+            
+            logger.info("✅ Транскрипция с автообнаружением (резюме) успешна!")
+            return transcript, "auto_detection_summary"
+            
+        except Exception as e2:
+            logger.warning(f"⚠️ Автообнаружение с резюме не сработало: {e2}")
+            
+            # Стратегия 3: Автообнаружение с главами
+            try:
+                logger.info("🌍 Пробую автообнаружение языка с главами...")
+                config_chapters = get_transcription_config_auto_chapters()
+                transcriber = aai.Transcriber(config=config_chapters)
+                transcript = transcriber.transcribe(file_path)
+                
+                if transcript.status == aai.TranscriptStatus.error:
+                    raise RuntimeError(f"Ошибка автообнаружения с главами: {transcript.error}")
+                
+                logger.info("✅ Транскрипция с автообнаружением (главы) успешна!")
+                return transcript, "auto_detection_chapters"
+                
+            except Exception as e3:
+                logger.error(f"❌ Все методы не сработали: русский({e}), авто-резюме({e2}), авто-главы({e3})")
+                raise RuntimeError(f"Не удалось транскрибировать файл всеми доступными методами")
 
 def transcribe_large_file(file_path, file_size, processing_mode):
     """Оптимизированная транскрипция для больших файлов"""
@@ -619,6 +678,7 @@ def transcribe():
         
         # Сохранение файла
         file.save(input_path)
+        file_size = os.path.getsize(input_path)  # Получаем точный размер после сохранения
         logger.info(f"📥 Большой файл сохранён: {file_size / 1024 / 1024:.1f} MB")
         
         # Оценка длительности
