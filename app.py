@@ -1,16 +1,11 @@
-from flask import Flask, render_template, request, jsonify, Response# app.py - Исправленная версия с гибридным подходом AssemblyAI
-from flask import Flask, render_template, request, jsonify, Response, stream_template
+# app.py - Полная версия с гибридным подходом AssemblyAI
+from flask import Flask, render_template, request, jsonify
 import os
 import tempfile
 import assemblyai as aai
 from openai import OpenAI
 import time
 import logging
-import signal
-import sys
-import json
-import threading
-import queue
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -120,7 +115,7 @@ def get_transcription_config_russian():
     )
 
 def transcribe_with_fallback(file_path):
-    """Улучшенная транскрипция с приоритетом русского языка"""
+    """Улучшенная транскрипция с множественным fallback"""
     
     # Стратегия 1: СНАЧАЛА пробуем русский язык (лучше для русского контента)
     try:
@@ -175,163 +170,7 @@ def transcribe_with_fallback(file_path):
                 logger.error(f"❌ Все методы не сработали: русский({e}), авто-резюме({e2}), авто-главы({e3})")
                 raise RuntimeError(f"Не удалось транскрибировать файл всеми доступными методами")
 
-def transcribe_large_file(file_path, file_size, processing_mode):
-    """Оптимизированная транскрипция для больших файлов"""
-    
-    # Выбираем стратегию на основе размера файла
-    if processing_mode in ["fast", "medium"]:
-        # Для файлов до 30MB - стандартный подход с приоритетом русского
-        return transcribe_with_fallback(file_path)
-    
-    # Для больших файлов (30MB+) - более консервативный подход
-    logger.info(f"🐌 Обработка большого файла в режиме: {processing_mode}")
-    
-    # Стратегия 1: Только русский язык (самый надежный для больших файлов)
-    try:
-        logger.info("🇷🇺 Большой файл: пробую только русский язык...")
-        config_ru = get_transcription_config_russian_optimized()
-        transcriber = aai.Transcriber(config=config_ru)
-        transcript = transcriber.transcribe(file_path)
-        
-        if transcript.status == aai.TranscriptStatus.error:
-            raise RuntimeError(f"Ошибка русского: {transcript.error}")
-        
-        if transcript.text and len(transcript.text.strip()) > 10:
-            logger.info("✅ Большой файл успешно транскрибирован на русском!")
-            return transcript, "russian_large_file_optimized"
-        else:
-            raise RuntimeError("Пустая транскрипция")
-        
-    except Exception as e:
-        logger.warning(f"⚠️ Русский для большого файла не сработал: {e}")
-        
-        # Стратегия 2: Только для очень упорных - автообнаружение (рискованно)
-        if processing_mode == "ultra_slow":
-            try:
-                logger.info("🌍 Большой файл: пробую автообнаружение (рискованно)...")
-                config_auto = get_transcription_config_auto_minimal()
-                transcriber = aai.Transcriber(config=config_auto)
-                transcript = transcriber.transcribe(file_path)
-                
-                if transcript.status == aai.TranscriptStatus.error:
-                    raise RuntimeError(f"Ошибка автообнаружения: {transcript.error}")
-                
-                logger.info("✅ Большой файл транскрибирован с автообнаружением!")
-                return transcript, "auto_detection_large_file"
-                
-            except Exception as e2:
-                logger.error(f"❌ Автообнаружение для большого файла не сработало: {e2}")
-                raise RuntimeError(f"Не удалось транскрибировать большой файл: русский({e}), авто({e2})")
-        else:
-            raise RuntimeError(f"Не удалось транскрибировать большой файл в режиме {processing_mode}: {e}")
-
-def get_transcription_config_russian_optimized():
-    """Оптимизированная конфигурация для больших русских файлов"""
-    return aai.TranscriptionConfig(
-        # === Основные настройки ===
-        speech_model=aai.SpeechModel.best,
-        language_code="ru",
-        
-        # === МИНИМАЛЬНЫЙ набор функций для экономии ресурсов ===
-        speaker_labels=False,  # Отключаем для экономии
-        entity_detection=True,  # Оставляем только самое важное
-        
-        # === Настройки качества ===
-        punctuate=True,
-        format_text=True,
-        dual_channel=False,
-        
-        # === Отключаем все ресурсоемкие функции ===
-        disfluencies=False,
-        filter_profanity=False,
-        redact_pii=False,
-    )
-
-def get_transcription_config_auto_minimal():
-    """Минимальная конфигурация автообнаружения для больших файлов"""
-    return aai.TranscriptionConfig(
-        # === Основные настройки ===
-        speech_model=aai.SpeechModel.best,
-        # language_code НЕ указываем - автообнаружение
-        
-        # === ТОЛЬКО САМЫЕ НЕОБХОДИМЫЕ функции ===
-        speaker_labels=False,  # Отключаем
-        entity_detection=True,  # Минимум
-        
-        # === БЕЗ тяжелых функций ===
-        # auto_highlights=False,  # Отключено
-        # auto_chapters=False,    # Отключено
-        # sentiment_analysis=False, # Отключено
-        # summarization=False,    # Отключено
-        # content_safety=False,   # Отключено
-        # iab_categories=False,   # Отключено
-        
-        # === Настройки качества ===
-        punctuate=True,
-        format_text=True,
-        dual_channel=False,
-        
-        # === Дополнительные функции ===
-        disfluencies=False,
-        filter_profanity=False,
-        redact_pii=False,
-    )
-    """Улучшенная транскрипция с приоритетом русского языка"""
-    
-    # Стратегия 1: СНАЧАЛА пробуем русский язык (лучше для русского контента)
-    try:
-        logger.info("🇷🇺 Пробую русский язык (рекомендуется для русского контента)...")
-        config_ru = get_transcription_config_russian()
-        transcriber = aai.Transcriber(config=config_ru)
-        transcript = transcriber.transcribe(file_path)
-        
-        if transcript.status == aai.TranscriptStatus.error:
-            raise RuntimeError(f"Ошибка русского: {transcript.error}")
-        
-        # Проверяем качество транскрипции
-        if transcript.text and len(transcript.text.strip()) > 10:
-            logger.info("✅ Транскрипция на русском успешна!")
-            return transcript, "russian_limited_features"
-        else:
-            raise RuntimeError("Пустая транскрипция")
-        
-    except Exception as e:
-        logger.warning(f"⚠️ Русский язык не сработал: {e}")
-        
-        # Стратегия 2: Автообнаружение с резюме
-        try:
-            logger.info("🌍 Пробую автообнаружение языка с резюме...")
-            config_auto = get_transcription_config_auto()
-            transcriber = aai.Transcriber(config=config_auto)
-            transcript = transcriber.transcribe(file_path)
-            
-            if transcript.status == aai.TranscriptStatus.error:
-                raise RuntimeError(f"Ошибка автообнаружения: {transcript.error}")
-            
-            logger.info("✅ Транскрипция с автообнаружением (резюме) успешна!")
-            return transcript, "auto_detection_summary"
-            
-        except Exception as e2:
-            logger.warning(f"⚠️ Автообнаружение с резюме не сработало: {e2}")
-            
-            # Стратегия 3: Автообнаружение с главами
-            try:
-                logger.info("🌍 Пробую автообнаружение языка с главами...")
-                config_chapters = get_transcription_config_auto_chapters()
-                transcriber = aai.Transcriber(config=config_chapters)
-                transcript = transcriber.transcribe(file_path)
-                
-                if transcript.status == aai.TranscriptStatus.error:
-                    raise RuntimeError(f"Ошибка автообнаружения с главами: {transcript.error}")
-                
-                logger.info("✅ Транскрипция с автообнаружением (главы) успешна!")
-                return transcript, "auto_detection_chapters"
-                
-            except Exception as e3:
-                logger.error(f"❌ Все методы не сработали: русский({e}), авто-резюме({e2}), авто-главы({e3})")
-                raise RuntimeError(f"Не удалось транскрибировать файл всеми доступными методами")
-
-# === Улучшенный генератор резюме ===
+# === Умный генератор резюме ===
 class AdvancedSummarizer:
     def __init__(self, openrouter_key):
         self.client = OpenAI(
@@ -510,7 +349,7 @@ class AdvancedSummarizer:
 # === Инициализация ===
 summarizer = AdvancedSummarizer(OPENROUTER_API_KEY)
 
-# === Улучшенные вспомогательные функции ===
+# === Вспомогательные функции ===
 def analyze_sentiment_overall(sentiment_results):
     """Анализирует общую тональность"""
     if not sentiment_results:
@@ -573,22 +412,6 @@ def get_transcription_features(transcription_method):
             "🛡️ Модерация контента",
             "📊 Категоризация тем"
         ]
-    elif transcription_method == "russian_large_file_optimized":
-        return [
-            "🎙️ Лучшая модель транскрипции",
-            "🇷🇺 Русский язык (оптимизировано)",
-            "🏷️ Определение сущностей",
-            "🧠 Умное резюме Claude",
-            "⚡ Оптимизация для больших файлов"
-        ]
-    elif transcription_method == "auto_detection_large_file":
-        return [
-            "🎙️ Лучшая модель транскрипции",
-            "🌍 Автообнаружение языка",
-            "🏷️ Определение сущностей",
-            "🧠 Умное резюме Claude",
-            "⚡ Режим больших файлов"
-        ]
     else:
         return [
             "🎙️ Лучшая модель транскрипции",
@@ -627,22 +450,20 @@ def health():
         "api_configured": bool(ASSEMBLYAI_API_KEY),
         "openrouter_configured": bool(OPENROUTER_API_KEY),
         "transcription_strategies": [
-            "1. Auto-detection with summary",
-            "2. Auto-detection with chapters", 
-            "3. Russian language (fallback)"
+            "1. Russian language (priority)",
+            "2. Auto-detection with summary", 
+            "3. Auto-detection with chapters"
         ],
         "fixes_applied": [
             "✅ Убран конфликт auto_chapters + summarization",
-            "✅ Добавлена множественная стратегия fallback",
+            "✅ Приоритет русскому языку",
             "✅ Улучшена обработка ошибок",
-            "✅ Добавлены таймауты",
             "✅ Оптимизирован размер контекста"
         ],
         "limits": {
-            "free_credits": "$50 (185 hours)",
             "max_file_size": "500MB",
-            "max_duration": "unlimited",
-            "parallel_processing": "5 files"
+            "recommended_size": "50MB",
+            "max_duration": "unlimited"
         }
     })
 
@@ -659,71 +480,25 @@ def transcribe():
         if file.filename == '':
             return jsonify({"error": "Файл не выбран"}), 400
 
-        # Проверка размера файла
-        file_size = len(file.read())
-        file.seek(0)  # Возвращаем указатель в начало
-        
-        # БОЛЕЕ МЯГКИЕ ЛИМИТЫ - разрешаем большие файлы
-        if file_size > 200 * 1024 * 1024:  # 200MB - новый лимит
-            return jsonify({
-                "error": "Файл превышает максимальный лимит (200MB)",
-                "limit_exceeded": True,
-                "current_size": f"{file_size / 1024 / 1024:.1f}MB",
-                "max_size": "200MB",
-                "suggestion": "Для файлов больше 200MB используйте специализированные сервисы или разбейте на части"
-            }), 413
-
         timestamp = int(time.time() * 1000)
-        input_path = os.path.join(TEMP_DIR, f"big_{timestamp}.{file.filename.split('.')[-1]}")
+        input_path = os.path.join(TEMP_DIR, f"hybrid_{timestamp}.{file.filename.split('.')[-1]}")
         
         # Сохранение файла
         file.save(input_path)
-        file_size = os.path.getsize(input_path)  # Получаем точный размер после сохранения
-        logger.info(f"📥 Большой файл сохранён: {file_size / 1024 / 1024:.1f} MB")
+        file_size = os.path.getsize(input_path)
+        logger.info(f"📥 Файл сохранён: {file_size / 1024 / 1024:.1f} MB")
         
-        # Оценка длительности
-        estimated_duration = file_size / (1024 * 1024 * 0.5)  # Примерно 0.5MB на минуту для MP3
-        logger.info(f"📊 Ожидаемая длительность: ~{estimated_duration:.1f} минут")
+        # Примерная оценка длительности
+        estimated_duration = file_size / 1024 / 1024  # грубая оценка в минутах
+        logger.info(f"📊 Примерная длительность: ~{estimated_duration:.1f} минут")
         
-        # ДИНАМИЧЕСКИЙ ТАЙМАУТ в зависимости от размера
-        if file_size < 10 * 1024 * 1024:  # До 10MB
-            timeout_seconds = 300  # 5 минут
-            processing_mode = "fast"
-        elif file_size < 30 * 1024 * 1024:  # До 30MB
-            timeout_seconds = 600  # 10 минут
-            processing_mode = "medium"
-        elif file_size < 60 * 1024 * 1024:  # До 60MB
-            timeout_seconds = 900  # 15 минут
-            processing_mode = "slow"
-        elif file_size < 100 * 1024 * 1024:  # До 100MB
-            timeout_seconds = 1200  # 20 минут
-            processing_mode = "very_slow"
-        else:  # До 200MB
-            timeout_seconds = 1800  # 30 минут
-            processing_mode = "ultra_slow"
+        # Улучшенная гибридная транскрипция с множественным fallback
+        transcript, transcription_method = transcribe_with_fallback(input_path)
         
-        logger.info(f"⏱️ Режим обработки: {processing_mode}, таймаут: {timeout_seconds/60:.1f} минут")
+        if not transcript.text:
+            return jsonify({"error": "Не удалось получить транскрипцию"}), 400
         
-        # Установка таймаута
-        import signal
-        
-        def timeout_handler(signum, frame):
-            raise TimeoutError(f"Превышено время обработки ({timeout_seconds/60:.1f} минут) для файла {file_size / 1024 / 1024:.1f}MB")
-        
-        signal.signal(signal.SIGALRM, timeout_handler)
-        signal.alarm(timeout_seconds)
-        
-        try:
-            # Оптимизированная транскрипция для больших файлов
-            transcript, transcription_method = transcribe_large_file(input_path, file_size, processing_mode)
-            
-            if not transcript.text:
-                return jsonify({"error": "Не удалось получить транскрипцию"}), 400
-            
-            logger.info(f"✅ Большой файл транскрибирован методом: {transcription_method}")
-            
-        finally:
-            signal.alarm(0)  # Отменяем таймаут
+        logger.info(f"✅ Транскрипция завершена методом: {transcription_method}")
         
         # Получаем точную длительность из результата AssemblyAI
         audio_duration_ms = getattr(transcript, 'audio_duration', None)
@@ -838,7 +613,7 @@ def transcribe():
         method_names = {
             "auto_detection_summary": "Автообнаружение языка с резюме",
             "auto_detection_chapters": "Автообнаружение языка с главами", 
-            "russian_limited_features": "Русский язык (fallback)"
+            "russian_limited_features": "Русский язык (приоритет)"
         }
         
         response_data["method_info"] = {
@@ -850,30 +625,8 @@ def transcribe():
 
         return jsonify(response_data), 200, {'Content-Type': 'application/json; charset=utf-8'}
         
-    except TimeoutError as e:
-        logger.error(f"⏰ Таймаут обработки: {e}")
-        return jsonify({
-            "error": "Превышено время обработки файла. Попробуйте файл меньшего размера (до 10 минут) или разбейте на части.",
-            "timeout": True,
-            "suggestion": "Рекомендуем файлы до 20MB для оптимальной скорости"
-        }), 408
     except Exception as e:
         logger.error(f"❌ Ошибка обработки: {e}")
-        error_message = str(e)
-        
-        # Специальная обработка ошибок AssemblyAI
-        if "timeout" in error_message.lower() or "timed out" in error_message.lower():
-            return jsonify({
-                "error": "Время ожидания AssemblyAI истекло. Файл слишком большой.",
-                "timeout": True,
-                "suggestion": "Попробуйте файл меньшего размера (до 10-15 минут)"
-            }), 408
-        elif "file too large" in error_message.lower() or "file size" in error_message.lower():
-            return jsonify({
-                "error": "Файл слишком большой для обработки",
-                "suggestion": "Максимальный размер: 100MB или 30 минут аудио"
-            }), 413
-        
         return jsonify({"error": f"Ошибка: {str(e)[:300]}"}), 500
     finally:
         if input_path and os.path.exists(input_path):
